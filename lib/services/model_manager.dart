@@ -1,3 +1,4 @@
+
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -48,6 +49,14 @@ class ModelManager extends ChangeNotifier {
         url: 'https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf?download=true',
         size: 2390000000, // ~2.39 GB
         quantization: QuantizationType.bit4,
+      ),
+      LlmModel(
+       id: 'llama-3.2-1b-instruct-q4_k_m',
+       name: 'Llama 3.2 1B Instruct (Q4_K_M)',
+       description: 'Compact 1B model from Meta. Good balance for testing.',
+       url: 'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf?download=true',
+       size: 670000000, // ~670 MB
+       quantization: QuantizationType.bit4,
       ),
       LlmModel(
         id: 'tiny-llm-q5_k_m',
