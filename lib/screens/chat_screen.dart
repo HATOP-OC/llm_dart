@@ -4,6 +4,7 @@ import 'package:animated_text_kit/animated_text_kit.dart';
 import '../services/chat_storage.dart';
 import '../services/llm_service.dart';
 import '../services/model_manager.dart';
+import '../services/prompt_manager.dart';
 import '../widgets/chat_bubble.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -49,12 +50,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _sendMessage() async {
     if (_isGenerating || _textController.text.trim().isEmpty) return;
 
-    setState(() {
-      _isGenerating = true;
-      _currentGeneratedText = "";
-    });
-
-    final message = _textController.text.trim();
+    final messageContent = _textController.text.trim();
     _textController.clear();
 
     final chatStorage = Provider.of<ChatStorage>(context, listen: false);
@@ -64,45 +60,45 @@ class _ChatScreenState extends State<ChatScreen> {
     final currentChat = chatStorage.currentChat;
     if (currentChat == null) return;
 
-    await chatStorage.addMessage(currentChat.id!, message, true);
-    _scrollToBottom();
-
-    if (modelManager.activeModel == null) {
-      await chatStorage.addMessage(
-        currentChat.id!,
-        "Error: Please load and activate a model in the 'Models' section first.",
-        false,
-      );
-      _scrollToBottom();
-      return;
-    }
-
     setState(() {
       _isGenerating = true;
       _currentGeneratedText = "";
     });
 
+    await chatStorage.addMessage(currentChat.id!, messageContent, true);
+    _scrollToBottom();
+
+    if (modelManager.activeModel == null) {
+      await chatStorage.addMessage(
+        currentChat.id!,
+        "Помилка: Будь ласка, завантажте та активуйте модель у розділі 'Моделі'.",
+        false,
+      );
+      setState(() {
+        _isGenerating = false;
+      });
+      _scrollToBottom();
+      return;
+    }
+    
+    // Add an empty message for the assistant's response
+    await chatStorage.addMessage(currentChat.id!, "", false);
+    _scrollToBottom();
+
     try {
-      await chatStorage.addMessage(currentChat.id!, "", false);
       _currentStreamId = DateTime.now().millisecondsSinceEpoch.toString();
 
-      final allMessages = chatStorage.getChatById(currentChat.id!)
-          ?.messages
-          .where((m) => m.content.isNotEmpty)
-          .toList();
+      final allMessages = chatStorage.getChatById(currentChat.id!)!.messages;
 
-      if (allMessages == null || allMessages.isEmpty) {
-        return;
-      }
+      // The history is all messages except the last two (the user's new message and the empty assistant message)
+      final historyMessages = allMessages.length > 2 ? allMessages.sublist(0, allMessages.length - 2) : [];
       
-      final history = allMessages
-          .take(allMessages.length - 1)
+      final history = historyMessages
           .map((m) => (m.isUser ? 'User: ' : 'Assistant: ') + m.content)
           .join('\n');
       
-      final userPrompt = allMessages.last.content;
-      const systemPrompt = 'You are a helpful assistant.';
-      final fullPrompt = '$systemPrompt\n\n$history\nUser: $userPrompt\nAssistant:';
+      final systemPrompt = PromptManager.getSystemPrompt();
+      final fullPrompt = '$systemPrompt\n\n$history\nUser: $messageContent\nAssistant:';
 
       llmService
           .generateResponseStream(fullPrompt)
@@ -130,11 +126,14 @@ class _ChatScreenState extends State<ChatScreen> {
               });
             },
             onError: (error) async {
-              await chatStorage.addMessage(
-                currentChat.id!,
-                "Error generating response: $error",
-                false,
-              );
+              final chat = chatStorage.getChatById(currentChat.id!);
+              if (chat != null && chat.messages.isNotEmpty) {
+                  final lastMessage = chat.messages.last;
+                  await chatStorage.updateMessage(
+                  lastMessage.id!,
+                  "Помилка генерації відповіді: $error",
+                );
+              }
               setState(() {
                 _isGenerating = false;
                 _currentStreamId = null;
@@ -143,11 +142,14 @@ class _ChatScreenState extends State<ChatScreen> {
             },
           );
     } catch (e) {
-      await chatStorage.addMessage(
-        currentChat.id!,
-        "Error generating response: ${e.toString()}",
-        false,
-      );
+      final chat = chatStorage.getChatById(currentChat.id!);
+      if (chat != null && chat.messages.isNotEmpty) {
+        final lastMessage = chat.messages.last;
+        await chatStorage.updateMessage(
+          lastMessage.id!,
+          "Помилка: ${e.toString()}",
+        );
+      }
       setState(() {
         _isGenerating = false;
         _currentStreamId = null;
@@ -291,7 +293,7 @@ class _ChatScreenState extends State<ChatScreen> {
             color: Colors.grey[900],
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.1),
+                color: Colors.black.withOpacity(0.1),
                 blurRadius: 4,
                 spreadRadius: 2,
               ),
