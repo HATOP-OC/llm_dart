@@ -47,7 +47,12 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _sendMessage() async {
-    if (_textController.text.trim().isEmpty) return;
+    if (_isGenerating || _textController.text.trim().isEmpty) return;
+
+    setState(() {
+      _isGenerating = true;
+      _currentGeneratedText = "";
+    });
 
     final message = _textController.text.trim();
     _textController.clear();
@@ -81,8 +86,26 @@ class _ChatScreenState extends State<ChatScreen> {
       await chatStorage.addMessage(currentChat.id!, "", false);
       _currentStreamId = DateTime.now().millisecondsSinceEpoch.toString();
 
+      final allMessages = chatStorage.getChatById(currentChat.id!)
+          ?.messages
+          .where((m) => m.content.isNotEmpty)
+          .toList();
+
+      if (allMessages == null || allMessages.isEmpty) {
+        return;
+      }
+      
+      final history = allMessages
+          .take(allMessages.length - 1)
+          .map((m) => (m.isUser ? 'User: ' : 'Assistant: ') + m.content)
+          .join('\n');
+      
+      final userPrompt = allMessages.last.content;
+      const systemPrompt = 'You are a helpful assistant.';
+      final fullPrompt = '$systemPrompt\n\n$history\nUser: $userPrompt\nAssistant:';
+
       llmService
-          .generateResponseStream(message)
+          .generateResponseStream(fullPrompt)
           .listen(
             (generatedPiece) async {
               setState(() {
