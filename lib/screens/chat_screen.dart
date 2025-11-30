@@ -18,7 +18,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   bool _isGenerating = false;
-  String? _currentStreamId;
+  String?  _currentStreamId;
   String _currentGeneratedText = "";
 
   @override
@@ -32,7 +32,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void _scrollToBottom() {
     if (_scrollController.hasClients) {
       _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
+        _scrollController.position. maxScrollExtent,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOut,
       );
@@ -42,7 +42,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void _stopGeneration() {
     if (_currentStreamId != null) {
       final llmService = Provider.of<LlmService>(context, listen: false);
-      llmService.stopGeneration(_currentStreamId!);
+      llmService. stopGeneration(_currentStreamId!);
       _currentStreamId = null;
     }
   }
@@ -50,12 +50,12 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _sendMessage() async {
     if (_isGenerating || _textController.text.trim().isEmpty) return;
 
-    final messageContent = _textController.text.trim();
+    final messageContent = _textController. text.trim();
     _textController.clear();
 
     final chatStorage = Provider.of<ChatStorage>(context, listen: false);
     final modelManager = Provider.of<ModelManager>(context, listen: false);
-    final llmService = Provider.of<LlmService>(context, listen: false);
+    final llmService = Provider. of<LlmService>(context, listen: false);
 
     final currentChat = chatStorage.currentChat;
     if (currentChat == null) return;
@@ -88,7 +88,7 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       _currentStreamId = DateTime.now().millisecondsSinceEpoch.toString();
 
-      final allMessages = chatStorage.getChatById(currentChat.id!)!.messages;
+      final allMessages = chatStorage.getChatById(currentChat.id!)!. messages;
 
       // The history is all messages except the last two (the user's new message and the empty assistant message)
       final historyMessages = allMessages.length > 2 ? allMessages.sublist(0, allMessages.length - 2) : [];
@@ -97,8 +97,15 @@ class _ChatScreenState extends State<ChatScreen> {
           .map((m) => (m.isUser ? 'User: ' : 'Assistant: ') + m.content)
           .join('\n');
       
-      final systemPrompt = PromptManager.getSystemPrompt();
-      final fullPrompt = '$systemPrompt\n\n$history\nUser: $messageContent\nAssistant:';
+      // Отримуємо назву активної моделі
+      final modelName = modelManager. activeModel?. name ?? 'llama';
+      
+      // Формуємо промпт з правильним форматом для моделі та мови
+      final fullPrompt = PromptManager.formatPromptWithHistory(
+        messageContent, 
+        history, 
+        modelName,
+      );
 
       llmService
           .generateResponseStream(fullPrompt)
@@ -108,7 +115,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 _currentGeneratedText = generatedPiece;
               });
 
-              final chat = chatStorage.getChatById(currentChat.id!);
+              final chat = chatStorage.getChatById(currentChat.id! );
               if (chat != null && chat.messages.isNotEmpty) {
                 final lastMessage = chat.messages.last;
                 await chatStorage.updateMessage(
@@ -126,11 +133,11 @@ class _ChatScreenState extends State<ChatScreen> {
               });
             },
             onError: (error) async {
-              final chat = chatStorage.getChatById(currentChat.id!);
-              if (chat != null && chat.messages.isNotEmpty) {
+              final chat = chatStorage. getChatById(currentChat.id!);
+              if (chat != null && chat. messages.isNotEmpty) {
                   final lastMessage = chat.messages.last;
                   await chatStorage.updateMessage(
-                  lastMessage.id!,
+                  lastMessage.id! ,
                   "Помилка генерації відповіді: $error",
                 );
               }
@@ -142,11 +149,11 @@ class _ChatScreenState extends State<ChatScreen> {
             },
           );
     } catch (e) {
-      final chat = chatStorage.getChatById(currentChat.id!);
-      if (chat != null && chat.messages.isNotEmpty) {
-        final lastMessage = chat.messages.last;
-        await chatStorage.updateMessage(
-          lastMessage.id!,
+      final chat = chatStorage. getChatById(currentChat.id!);
+      if (chat != null && chat. messages.isNotEmpty) {
+        final lastMessage = chat. messages.last;
+        await chatStorage. updateMessage(
+          lastMessage.id! ,
           "Помилка: ${e.toString()}",
         );
       }
@@ -168,11 +175,11 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Consumer<ChatStorage>(
             builder: (context, chatStorage, child) {
               return ListView.builder(
-                scrollDirection: Axis.horizontal,
+                scrollDirection: Axis. horizontal,
                 itemCount: chatStorage.chats.length,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 itemBuilder: (context, index) {
-                  final chat = chatStorage.chats[index];
+                  final chat = chatStorage. chats[index];
                   final isSelected = chat.id == chatStorage.currentChat?.id;
 
                   return GestureDetector(
@@ -187,15 +194,15 @@ class _ChatScreenState extends State<ChatScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       decoration: BoxDecoration(
                         color: isSelected
-                            ? Colors.blue.shade800
-                            : Colors.grey.shade800,
-                        borderRadius: BorderRadius.circular(20),
+                            ? Colors. blue. shade800
+                            : Colors.grey. shade800,
+                        borderRadius: BorderRadius. circular(20),
                       ),
                       alignment: Alignment.center,
                       child: Text(
                         chat.title,
                         style: TextStyle(
-                          color: isSelected ? Colors.white : Colors.grey[300],
+                          color: isSelected ?  Colors.white : Colors.grey[300],
                         ),
                       ),
                     ),
@@ -209,7 +216,7 @@ class _ChatScreenState extends State<ChatScreen> {
         Expanded(
           child: Consumer<ChatStorage>(
             builder: (context, chatStorage, child) {
-              final currentChat = chatStorage.currentChat;
+              final currentChat = chatStorage. currentChat;
 
               if (currentChat == null) {
                 return const Center(
@@ -217,7 +224,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 );
               }
 
-              final chat = chatStorage.getChatById(currentChat.id!);
+              final chat = chatStorage. getChatById(currentChat.id!);
               if (chat == null) {
                 return const Center(child: Text('Chat not found'));
               }
@@ -225,12 +232,12 @@ class _ChatScreenState extends State<ChatScreen> {
               return ListView.builder(
                 controller: _scrollController,
                 padding: const EdgeInsets.only(top: 16, bottom: 80),
-                itemCount: chat.messages.length,
+                itemCount: chat.messages. length,
                 itemBuilder: (context, index) {
                   final message = chat.messages[index];
 
                   if (index == chat.messages.length - 1 &&
-                      !message.isUser &&
+                      ! message.isUser &&
                       _isGenerating) {
                     return Align(
                       alignment: Alignment.centerLeft,
@@ -244,19 +251,19 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: Colors.grey.shade800,
-                          borderRadius: BorderRadius.circular(16),
+                          color: Colors.grey. shade800,
+                          borderRadius: BorderRadius. circular(16),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            _currentGeneratedText.isEmpty
+                            _currentGeneratedText. isEmpty
                                 ? AnimatedTextKit(
                                     animatedTexts: [
                                       WavyAnimatedText(
-                                        'Generating response...',
+                                        'Generating response.. .',
                                         textStyle: const TextStyle(
-                                          color: Colors.white,
+                                          color: Colors. white,
                                         ),
                                       ),
                                     ],
@@ -271,7 +278,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             Text(
                               _formatTime(DateTime.now()),
                               style: TextStyle(
-                                color: Colors.grey.shade400,
+                                color: Colors.grey. shade400,
                                 fontSize: 12,
                               ),
                             ),
@@ -319,25 +326,25 @@ class _ChatScreenState extends State<ChatScreen> {
                       vertical: 8,
                     ),
                   ),
-                  style: const TextStyle(color: Colors.white),
+                  style: const TextStyle(color: Colors. white),
                   textInputAction: TextInputAction.send,
-                  onSubmitted: (_) => _isGenerating ? null : _sendMessage(),
+                  onSubmitted: (_) => _isGenerating ?  null : _sendMessage(),
                   maxLines: null,
-                  enabled: !_isGenerating,
+                  enabled: ! _isGenerating,
                 ),
               ),
               const SizedBox(width: 8),
               Container(
                 decoration: BoxDecoration(
-                  color: _isGenerating ? Colors.red : Colors.blue,
+                  color: _isGenerating ?  Colors.red : Colors.blue,
                   shape: BoxShape.circle,
                 ),
                 child: IconButton(
                   icon: Icon(
-                    _isGenerating ? Icons.stop : Icons.send,
+                    _isGenerating ? Icons. stop : Icons.send,
                     color: Colors.white,
                   ),
-                  onPressed: _isGenerating ? _stopGeneration : _sendMessage,
+                  onPressed: _isGenerating ?  _stopGeneration : _sendMessage,
                 ),
               ),
             ],
@@ -348,6 +355,6 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String _formatTime(DateTime time) {
-    return '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    return '${time. hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
   }
 }

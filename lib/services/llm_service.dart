@@ -98,7 +98,7 @@ class LlmService {
         tokens,
         maxTokens: maxTokens,
         contextLength: _contextLength,
-        temperature: 0.3,        // Низька для стабільності
+        temperature: 0.5,        // Низька для стабільності
         topP: 0.85,
         topK: 40,
         repeatPenalty: 1.2,      // Проти повторень
