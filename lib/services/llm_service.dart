@@ -13,10 +13,29 @@ class LlmService {
   factory LlmService() => _instance;
   
   late final LlamaBindings _bindings;
-  int? _currentModelId;
+  int?  _currentModelId;
   Pointer<LlamaDartContext>? _currentContext;
   int _contextLength = 2048;
   final Map<String, StreamController<String>> _generationControllers = {};
+  
+  // Стоп-послідовності для очищення відповіді
+  static const List<String> _stopSequences = [
+    'User:',
+    '\nUser:',
+    'Human:',
+    '\nHuman:',
+    'Assistant:',
+    '\nAssistant:',
+    '<|im_end|>',
+    '<|im_start|>',
+    '<end_of_turn>',
+    '<start_of_turn>',
+    '<|eot_id|>',
+    '<|end|>',
+    '</s>',
+    '<|assistant|>',
+    '<|user|>',
+  ];
   
   LlmService._internal();
   
@@ -24,7 +43,7 @@ class LlmService {
     _bindings = LlamaBindings();
     
     final prefs = await SharedPreferences.getInstance();
-    _contextLength = prefs.getInt('context_length') ?? 2048;
+    _contextLength = prefs. getInt('context_length') ?? 2048;
   }
   
   void setContextLength(int length) {
@@ -34,12 +53,12 @@ class LlmService {
   Future<bool> loadModel(LlmModel model) async {
     // Перевіримо, чи потрібно розвантажувати поточну модель
     if (_currentModelId != null && _currentContext != null) {
-      _bindings.freeContext(_currentContext!);
+      _bindings.freeContext(_currentContext! );
       _currentContext = null;
     }
     
     final modelsDir = await _getModelsDirectory();
-    final modelPath = '${modelsDir.path}/${model.id}.bin';
+    final modelPath = '${modelsDir. path}/${model.id}.bin';
     
     try {
       // Завантажуємо модель з FFI інтерфейсу
@@ -48,15 +67,15 @@ class LlmService {
       _currentModelId = _bindings.loadModel(
         modelPath,
         quantizationType: quantType,
-        nThreads: 4, // Можна зробити налаштованим
+        nThreads: 4,
       );
       
-      if (_currentModelId! <= 0) {
+      if (_currentModelId!  <= 0) {
         return false;
       }
       
       // Створюємо контекст для моделі
-      _currentContext = _bindings.createContext(_currentModelId!);
+      _currentContext = _bindings.createContext(_currentModelId! );
       return _currentContext != null;
     } catch (e) {
       debugPrint('Помилка завантаження моделі: $e');
@@ -73,24 +92,77 @@ class LlmService {
       // Токенізуємо вхідний текст
       final tokens = _bindings.tokenize(_currentContext!, prompt);
       
-      // Генеруємо відповідь
+      // Генеруємо відповідь з оптимізованими параметрами
       final result = _bindings.generate(
-        _currentContext!,
+        _currentContext! ,
         tokens,
         maxTokens: maxTokens,
         contextLength: _contextLength,
-        temperature: 0.8,
-        topP: 0.9,
+        temperature: 0.3,        // Низька для стабільності
+        topP: 0.85,
+        topK: 40,
+        repeatPenalty: 1.2,      // Проти повторень
+        frequencyPenalty: 0.1,
+        presencePenalty: 0.1,
       );
       
       // Звільняємо пам'ять токенів
       _bindings.freeTokenizedText(tokens);
       
-      return result;
+      // Очищаємо відповідь від артефактів
+      return _cleanResponse(result);
     } catch (e) {
       debugPrint('Помилка генерації відповіді: $e');
       return 'Помилка генерації відповіді: $e';
     }
+  }
+  
+  /// Очищення відповіді від стоп-послідовностей та артефактів
+  String _cleanResponse(String response) {
+    String cleaned = response;
+    
+    // Видаляємо стоп-послідовності
+    for (final stop in _stopSequences) {
+      if (cleaned.contains(stop)) {
+        cleaned = cleaned.split(stop).first;
+      }
+    }
+    
+    // Видаляємо повторювані слова (наприклад "assistant_oc assistant_oc...")
+    cleaned = _removeRepeatedPhrases(cleaned);
+    
+    // Видаляємо зайві пробіли та переноси
+    cleaned = cleaned.trim();
+    cleaned = cleaned.replaceAll(RegExp(r'\n{3,}'), '\n\n');
+    cleaned = cleaned.replaceAll(RegExp(r' {2,}'), ' ');
+    
+    return cleaned;
+  }
+  
+  /// Видалення повторюваних фраз
+  String _removeRepeatedPhrases(String text) {
+    // Перевіряємо на повторення слів більше 3 разів підряд
+    final words = text.split(RegExp(r'\s+'));
+    if (words.length < 4) return text;
+    
+    final result = <String>[];
+    int repeatCount = 0;
+    String?  lastWord;
+    
+    for (final word in words) {
+      if (word == lastWord) {
+        repeatCount++;
+        if (repeatCount < 2) {
+          result.add(word);
+        }
+      } else {
+        repeatCount = 0;
+        result. add(word);
+        lastWord = word;
+      }
+    }
+    
+    return result.join(' ');
   }
   
   // Потокова генерація відповіді для відображення у реальному часі
@@ -103,29 +175,43 @@ class LlmService {
       if (_currentModelId == null || _currentContext == null) {
         controller.addError('Модель не завантажена');
         await controller.close();
-        _generationControllers.remove(streamId);
+        _generationControllers. remove(streamId);
         return;
       }
       
       try {
-        // Поки що використовуємо синхронну генерацію та емулюємо потокову
         String result = await generateResponse(prompt, maxTokens: maxTokens);
         
         // Емулюємо потокову генерацію
         String accumulated = '';
         for (int i = 0; i < result.length; i++) {
           if (controller.isClosed) break;
+          
           accumulated += result[i];
+          
+          // Перевірка на стоп-послідовності під час стрімінгу
+          bool shouldStop = false;
+          for (final stop in _stopSequences) {
+            if (accumulated.endsWith(stop)) {
+              accumulated = accumulated.substring(0, accumulated.length - stop.length);
+              shouldStop = true;
+              break;
+            }
+          }
+          
           controller.add(accumulated);
+          
+          if (shouldStop) break;
+          
           await Future.delayed(const Duration(milliseconds: 20));
         }
         
         await controller.close();
       } catch (e) {
-        controller.addError('Помилка генерації: $e');
+        controller. addError('Помилка генерації: $e');
         await controller.close();
       } finally {
-        _generationControllers.remove(streamId);
+        _generationControllers. remove(streamId);
       }
     }
     
@@ -135,7 +221,7 @@ class LlmService {
   
   void stopGeneration(String streamId) {
     final controller = _generationControllers[streamId];
-    if (controller != null && !controller.isClosed) {
+    if (controller != null && ! controller.isClosed) {
       controller.close();
       _generationControllers.remove(streamId);
     }
@@ -143,7 +229,7 @@ class LlmService {
   
   void unloadCurrentModel() {
     if (_currentContext != null) {
-      _bindings.freeContext(_currentContext!);
+      _bindings. freeContext(_currentContext!);
       _currentContext = null;
       _currentModelId = null;
     }
@@ -151,7 +237,7 @@ class LlmService {
   
   Future<Directory> _getModelsDirectory() async {
     final appDir = await getApplicationDocumentsDirectory();
-    final modelsDir = Directory('${appDir.path}/models');
+    final modelsDir = Directory('${appDir. path}/models');
     
     if (!await modelsDir.exists()) {
       await modelsDir.create(recursive: true);
@@ -163,7 +249,6 @@ class LlmService {
   // Мок-метод для тестування без реальної моделі
   Future<String> generateMockResponse(String prompt) async {
     await Future.delayed(const Duration(seconds: 2));
-    return "Це тестова відповідь для запиту: $prompt. "
-           "У реальній версії, тут буде відповідь від LLM моделі.";
+    return "Це тестова відповідь для запиту: $prompt. ";
   }
 }

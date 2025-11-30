@@ -18,6 +18,8 @@ typedef struct {
     int32_t contextLength;
     float temperature;
     float topP;
+    float topK;              // ДОДАНО
+    float repeatPenalty;     // ДОДАНО
     int32_t seed;
     double frequencyPenalty;
     double presencePenalty;
