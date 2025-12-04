@@ -1,9 +1,9 @@
-
 import 'dart:async';
 import 'dart:io';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/llm_model.dart';
 import 'llm_service.dart';
@@ -11,13 +11,19 @@ import 'llm_service.dart';
 class ModelManager extends ChangeNotifier {
   final LlmService llmService;
   List<LlmModel> _models = [];
-  String? _activeModelId;
+  String?  _activeModelId;
   late SharedPreferences _prefs;
   final Map<String, StreamSubscription> _downloadSubscriptions = {};
+  final Map<String, Sink<List<int>>> _checksumSinks = {};
+  final Map<String, AccumulatorSink<Digest>> _checksumOutputs = {};
+  bool _isInitialized = false;
+  bool _isLoadingModel = false;
 
   ModelManager({required this.llmService});
   
   List<LlmModel> get models => _models;
+  bool get isInitialized => _isInitialized;
+  bool get isLoadingModel => _isLoadingModel;
   
   LlmModel? get activeModel {
     if (_activeModelId == null) return null;
@@ -32,63 +38,134 @@ class ModelManager extends ChangeNotifier {
     _prefs = await SharedPreferences.getInstance();
     _activeModelId = _prefs.getString('active_model_id');
     
-    // Add pre-defined models
     _models = [
       LlmModel(
         id: 'gemma-3n-E2B-it-Q4_K_M',
         name: 'Gemma 3n E2B It (4-bit)',
-        description: 'A 3rd generation, lightweight, state-of-the-art open model from Google.',
+        description: 'A 3rd generation, lightweight model from Google.',
         url: 'https://huggingface.co/unsloth/gemma-3n-E2B-it-GGUF/resolve/main/gemma-3n-E2B-it-Q4_K_M.gguf?download=true',
-        size: 3030000000, // ~3.03 GB
+        size: 3030000000,
         quantization: QuantizationType.bit4,
       ),
       LlmModel(
         id: 'phi-3-mini-4k-instruct-q4',
         name: 'Phi-3 Mini Instruct (4-bit)',
-        description: 'A 3.8B parameter, lightweight, state-of-the-art open model from Microsoft.',
+        description: 'A 3. 8B parameter model from Microsoft.',
         url: 'https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf?download=true',
-        size: 2390000000, // ~2.39 GB
+        size: 2390000000,
         quantization: QuantizationType.bit4,
       ),
       LlmModel(
-       id: 'llama-3.2-1b-instruct-q4_k_m',
-       name: 'Llama 3.2 1B Instruct (Q4_K_M)',
-       description: 'Compact 1B model from Meta. Good balance for testing.',
-       url: 'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf?download=true',
-       size: 670000000, // ~670 MB
-       quantization: QuantizationType.bit4,
+        id: 'llama-3. 2-1b-instruct-q4_k_m',
+        name: 'Llama 3. 2 1B Instruct (Q4_K_M)',
+        description: 'Compact 1B model from Meta.',
+        url: 'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf?download=true',
+        size: 808000000,
+        quantization: QuantizationType.bit4,
       ),
       LlmModel(
-        id: 'tiny-llm-q5_k_m',
-        name: 'TinyLLM (Q5_K_M)',
-        description: 'A very small model for testing purposes.',
-        url: 'https://huggingface.co/aimlresearch2023/Tiny-LLM-Q5_K_M-GGUF/resolve/main/tiny-llm-q5_k_m.gguf?download=true',
-        size: 12400000, // ~12.4 MB
+        id: 'qwen2. 5-1.5b-instruct-q4_k_m',
+        name: 'Qwen 2.5 1. 5B Instruct (Q4_K_M)',
+        description: 'Efficient 1.5B model from Alibaba.',
+        url: 'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf?download=true',
+        size: 986000000,
         quantization: QuantizationType.bit4,
       ),
     ];
     
-    // Check which models are already downloaded
     await _checkDownloadedModels();
+    
+    _isInitialized = true;
+    notifyListeners();
+    
+    // Завантажуємо активну модель після ініціалізації UI
+    _reloadActiveModel();
+  }
+  
+  Future<void> _reloadActiveModel() async {
+    if (_activeModelId == null) return;
+    
+    final modelIndex = _models.indexWhere((m) => m.id == _activeModelId);
+    if (modelIndex == -1) {
+      await _clearActiveModel();
+      return;
+    }
+    
+    final model = _models[modelIndex];
+    
+    // Перевіряємо чи файл існує
+    final modelsDir = await _getModelsDirectory();
+    final modelFile = File('${modelsDir.path}/${model.id}.bin');
+    
+    if (!await modelFile.exists()) {
+      debugPrint('Model file not found: ${modelFile.path}');
+      await _clearActiveModel();
+      _models[modelIndex] = model.copyWith(status: ModelStatus.notDownloaded);
+      notifyListeners();
+      return;
+    }
+    
+    debugPrint('Reloading model: ${model.name}');
+    
+    _models[modelIndex] = model.copyWith(status: ModelStatus.activating);
+    _isLoadingModel = true;
+    notifyListeners();
+    
+    final success = await llmService.loadModel(model);
+    
+    if (success) {
+      _models[modelIndex] = model.copyWith(status: ModelStatus.active);
+      debugPrint('Model reloaded successfully');
+    } else {
+      _models[modelIndex] = model.copyWith(status: ModelStatus.downloaded);
+      await _clearActiveModel();
+      debugPrint('Failed to reload model');
+    }
+    
+    _isLoadingModel = false;
+    notifyListeners();
+  }
+  
+  Future<void> _clearActiveModel() async {
+    _activeModelId = null;
+    await _prefs.remove('active_model_id');
+    llmService.unloadCurrentModel();
   }
   
   Future<void> _checkDownloadedModels() async {
     final modelsDir = await _getModelsDirectory();
     
-    for (int i = 0; i < _models.length; i++) {
+    for (int i = 0; i < _models. length; i++) {
       final model = _models[i];
       final modelFile = File('${modelsDir.path}/${model.id}.bin');
       
       if (await modelFile.exists()) {
-        _models[i] = model.copyWith(
-          status: model.id == _activeModelId 
-            ? ModelStatus.active 
-            : ModelStatus.downloaded
-        );
+        final fileSize = await modelFile.length();
+        
+        // Файл пошкоджений якщо менше 95% очікуваного
+        if (fileSize < model.size * 0.95) {
+          debugPrint('Incomplete file: ${model.id}');
+          await modelFile.delete();
+          continue;
+        }
+        
+        _models[i] = model.copyWith(status: ModelStatus.downloaded);
       }
     }
     
-    notifyListeners();
+    // Очищуємо . tmp файли
+    await _cleanupTempFiles(modelsDir);
+  }
+  
+  Future<void> _cleanupTempFiles(Directory modelsDir) async {
+    try {
+      final files = modelsDir.listSync();
+      for (final file in files) {
+        if (file is File && file.path.endsWith('.tmp')) {
+          await file.delete();
+        }
+      }
+    } catch (_) {}
   }
   
   Future<Directory> _getModelsDirectory() async {
@@ -102,108 +179,211 @@ class ModelManager extends ChangeNotifier {
     return modelsDir;
   }
   
+  void _cleanupChecksumResources(String modelId) {
+    try {
+      _checksumSinks[modelId]?.close();
+    } catch (_) {}
+    _checksumSinks.remove(modelId);
+    _checksumOutputs.remove(modelId);
+  }
+  
   Future<void> downloadModel(String modelId) async {
     final modelIndex = _models.indexWhere((m) => m.id == modelId);
     if (modelIndex == -1) return;
     
     final model = _models[modelIndex];
     final modelsDir = await _getModelsDirectory();
-    final modelFile = File('${modelsDir.path}/${model.id}.bin');
     
-    // Update model status to "downloading"
+    final tempFile = File('${modelsDir.path}/${model.id}.tmp');
+    final finalFile = File('${modelsDir.path}/${model.id}.bin');
+    
+    // Видаляємо попередні файли
+    if (await tempFile. exists()) await tempFile.delete();
+    if (await finalFile.exists()) await finalFile.delete();
+    
     _models[modelIndex] = model.copyWith(
       status: ModelStatus.downloading,
       downloadProgress: 0.0,
     );
     notifyListeners();
     
+    // Потоковий checksum
+    final checksumOutput = AccumulatorSink<Digest>();
+    final checksumInput = sha256.startChunkedConversion(checksumOutput);
+    _checksumOutputs[modelId] = checksumOutput;
+    _checksumSinks[modelId] = checksumInput;
+    
+    IOSink? sink;
+    http.Client? client;
+    
     try {
-      final client = http.Client();
+      client = http.Client();
       final request = http.Request('GET', Uri.parse(model.url));
-      final response = await client.send(request);
+      final response = await client. send(request);
       
-      if (response.statusCode == 200) {
-        final contentLength = response.contentLength ?? 0;
-        final sink = modelFile.openWrite();
-        int received = 0;
-        
-        _downloadSubscriptions[modelId] = response.stream.listen(
-          (chunk) {
-            sink.add(chunk);
-            received += chunk.length;
-            
-            if (contentLength > 0) {
-              final progress = received / contentLength;
-              _models[modelIndex] = model.copyWith(
-                status: ModelStatus.downloading,
-                downloadProgress: progress,
-              );
-              notifyListeners();
-            }
-          },
-          onDone: () async {
-            _models[modelIndex] = model.copyWith(
-              status: ModelStatus.finalizing,
-              downloadProgress: 1.0,
-            );
-            notifyListeners();
-
-            await sink.close();
-
-            _models[modelIndex] = model.copyWith(
-              status: ModelStatus.downloaded,
-              downloadProgress: 1.0,
-            );
-            _downloadSubscriptions.remove(modelId);
-            notifyListeners();
-          },
-          onError: (_) async {
-            await sink.close();
-            await modelFile.delete();
-            _models[modelIndex] = model.copyWith(
-              status: ModelStatus.error,
-            );
-            _downloadSubscriptions.remove(modelId);
-            notifyListeners();
-          },
-          cancelOnError: true,
-        );
-      } else {
-        _models[modelIndex] = model.copyWith(
-          status: ModelStatus.error,
-        );
-        notifyListeners();
+      if (response.statusCode != 200) {
+        throw Exception('HTTP ${response.statusCode}');
       }
-    } catch (e) {
-      _models[modelIndex] = model.copyWith(
-        status: ModelStatus.error,
+      
+      final contentLength = response.contentLength ??  0;
+      sink = tempFile.openWrite();
+      int received = 0;
+      
+      _downloadSubscriptions[modelId] = response.stream.listen(
+        (chunk) {
+          sink?.add(chunk);
+          _checksumSinks[modelId]?.add(chunk);
+          received += chunk.length;
+          
+          if (contentLength > 0) {
+            _models[modelIndex] = model.copyWith(
+              status: ModelStatus.downloading,
+              downloadProgress: received / contentLength,
+            );
+            notifyListeners();
+          }
+        },
+        onDone: () async {
+          await _finishDownload(
+            modelId, modelIndex, model, sink, tempFile, finalFile, client,
+          );
+        },
+        onError: (error) async {
+          await _handleDownloadError(
+            modelId, modelIndex, model, sink, tempFile, client, error,
+          );
+        },
+        cancelOnError: true,
       );
+      
+    } catch (e) {
+      await sink?.close();
+      _cleanupChecksumResources(modelId);
+      if (await tempFile.exists()) await tempFile.delete();
+      _models[modelIndex] = model.copyWith(status: ModelStatus.error);
+      client?.close();
       notifyListeners();
-      rethrow;
     }
+  }
+  
+  Future<void> _finishDownload(
+    String modelId,
+    int modelIndex,
+    LlmModel model,
+    IOSink?  sink,
+    File tempFile,
+    File finalFile,
+    http.Client?  client,
+  ) async {
+    _models[modelIndex] = model.copyWith(
+      status: ModelStatus.finalizing,
+      downloadProgress: 1.0,
+    );
+    notifyListeners();
+    
+    await sink?.flush();
+    await sink?.close();
+    
+    // Перевіряємо розмір
+    if (! await tempFile.exists()) {
+      _onDownloadFailed(modelId, modelIndex, model, client);
+      return;
+    }
+    
+    final downloadedSize = await tempFile.length();
+    if (downloadedSize < model.size * 0.95) {
+      await tempFile.delete();
+      _onDownloadFailed(modelId, modelIndex, model, client);
+      return;
+    }
+    
+    // Зберігаємо checksum
+    try {
+      _checksumSinks[modelId]?.close();
+      final digest = _checksumOutputs[modelId]?.events.single;
+      if (digest != null) {
+        await llmService.saveModelChecksum(modelId, digest.toString());
+      }
+    } catch (_) {}
+    
+    _cleanupChecksumResources(modelId);
+    
+    // Переміщуємо файл
+    try {
+      await tempFile.rename(finalFile.path);
+    } catch (_) {
+      // Fallback: копіюємо потоково
+      await tempFile.openRead().pipe(finalFile.openWrite());
+      await tempFile.delete();
+    }
+    
+    if (! await finalFile.exists()) {
+      _onDownloadFailed(modelId, modelIndex, model, client);
+      return;
+    }
+    
+    _models[modelIndex] = model.copyWith(
+      status: ModelStatus.downloaded,
+      downloadProgress: 1.0,
+    );
+    _downloadSubscriptions. remove(modelId);
+    client?.close();
+    notifyListeners();
+  }
+  
+  Future<void> _handleDownloadError(
+    String modelId,
+    int modelIndex,
+    LlmModel model,
+    IOSink? sink,
+    File tempFile,
+    http. Client? client,
+    dynamic error,
+  ) async {
+    debugPrint('Download error: $error');
+    await sink?.close();
+    _cleanupChecksumResources(modelId);
+    if (await tempFile. exists()) await tempFile.delete();
+    _onDownloadFailed(modelId, modelIndex, model, client);
+  }
+  
+  void _onDownloadFailed(
+    String modelId,
+    int modelIndex,
+    LlmModel model,
+    http.Client?  client,
+  ) {
+    _cleanupChecksumResources(modelId);
+    _models[modelIndex] = model.copyWith(status: ModelStatus.error);
+    _downloadSubscriptions.remove(modelId);
+    client?.close();
+    notifyListeners();
   }
 
   Future<void> cancelDownload(String modelId) async {
     final subscription = _downloadSubscriptions[modelId];
-    if (subscription != null) {
-      await subscription.cancel();
-      _downloadSubscriptions.remove(modelId);
+    if (subscription == null) return;
+    
+    await subscription.cancel();
+    _downloadSubscriptions.remove(modelId);
+    _cleanupChecksumResources(modelId);
 
-      // Clean up partial file
-      final modelIndex = _models.indexWhere((m) => m.id == modelId);
-      if (modelIndex != -1) {
-        final model = _models[modelIndex];
-        final modelsDir = await _getModelsDirectory();
-        final modelFile = File('${modelsDir.path}/${model.id}.bin');
-        if (await modelFile.exists()) {
-          await modelFile.delete();
-        }
-        _models[modelIndex] = model.copyWith(
-          status: ModelStatus.notDownloaded,
-          downloadProgress: 0.0,
-        );
-        notifyListeners();
-      }
+    final modelIndex = _models. indexWhere((m) => m.id == modelId);
+    if (modelIndex != -1) {
+      final model = _models[modelIndex];
+      final modelsDir = await _getModelsDirectory();
+      
+      final tempFile = File('${modelsDir. path}/${model. id}.tmp');
+      final finalFile = File('${modelsDir.path}/${model.id}.bin');
+      
+      if (await tempFile. exists()) await tempFile.delete();
+      if (await finalFile.exists()) await finalFile.delete();
+      
+      _models[modelIndex] = model.copyWith(
+        status: ModelStatus.notDownloaded,
+        downloadProgress: 0.0,
+      );
+      notifyListeners();
     }
   }
   
@@ -213,79 +393,93 @@ class ModelManager extends ChangeNotifier {
     
     final model = _models[modelIndex];
     final modelsDir = await _getModelsDirectory();
+    
     final modelFile = File('${modelsDir.path}/${model.id}.bin');
+    final tempFile = File('${modelsDir. path}/${model. id}.tmp');
     
-    if (await modelFile.exists()) {
-      await modelFile.delete();
-    }
+    if (await modelFile.exists()) await modelFile.delete();
+    if (await tempFile. exists()) await tempFile.delete();
     
-    _models[modelIndex] = model.copyWith(
+    await _prefs.remove('checksum_$modelId');
+    
+    _models[modelIndex] = model. copyWith(
       status: ModelStatus.notDownloaded,
       downloadProgress: 0.0,
     );
     
     if (_activeModelId == modelId) {
-      _activeModelId = null;
-      await _prefs.remove('active_model_id');
+      await _clearActiveModel();
     }
     
     notifyListeners();
   }
   
   Future<bool> setActiveModel(String modelId) async {
-    if (_activeModelId == modelId) return true;
+    if (_activeModelId == modelId && llmService.isModelLoaded) {
+      return true;
+    }
     
     final modelIndex = _models.indexWhere((m) => m.id == modelId);
     if (modelIndex == -1) return false;
     
     final model = _models[modelIndex];
 
-    // Check if the model is downloaded
-    if (model.status != ModelStatus.downloaded) {
+    if (model.status != ModelStatus.downloaded && 
+        model.status != ModelStatus.active) {
       return false;
     }
     
-    // Set status to activating
+    // Перевіряємо файл
+    final modelsDir = await _getModelsDirectory();
+    final modelFile = File('${modelsDir.path}/${model.id}.bin');
+    
+    if (!await modelFile.exists()) {
+      _models[modelIndex] = model.copyWith(status: ModelStatus.notDownloaded);
+      notifyListeners();
+      return false;
+    }
+    
     _models[modelIndex] = model.copyWith(status: ModelStatus.activating);
+    _isLoadingModel = true;
     notifyListeners();
 
-    // Load the model into the LLM service
     final success = await llmService.loadModel(model);
 
-    if (!success) {
-      // If loading fails, revert status to downloaded
+    if (! success) {
       _models[modelIndex] = model.copyWith(status: ModelStatus.downloaded);
+      _isLoadingModel = false;
       notifyListeners();
       return false;
     }
 
-    // Update the previous active model
-    if (_activeModelId != null) {
-      final oldActiveIndex = _models.indexWhere((m) => m.id == _activeModelId);
-      if (oldActiveIndex != -1) {
-        _models[oldActiveIndex] = _models[oldActiveIndex].copyWith(
-          status: ModelStatus.downloaded,
-        );
+    // Деактивуємо попередню
+    if (_activeModelId != null && _activeModelId != modelId) {
+      final oldIndex = _models.indexWhere((m) => m.id == _activeModelId);
+      if (oldIndex != -1) {
+        _models[oldIndex] = _models[oldIndex].copyWith(status: ModelStatus.downloaded);
       }
     }
     
-    // Set the new active model
-    _models[modelIndex] = model.copyWith(status: ModelStatus.active);
+    _models[modelIndex] = model.copyWith(status: ModelStatus. active);
     _activeModelId = modelId;
     await _prefs.setString('active_model_id', modelId);
     
+    _isLoadingModel = false;
     notifyListeners();
     return true;
   }
   
-  Future<void> updateModelQuantization(String modelId, QuantizationType quantization) async {
-    final modelIndex = _models.indexWhere((m) => m.id == modelId);
-    if (modelIndex == -1) return;
-    
-    _models[modelIndex] = _models[modelIndex].copyWith(
-      quantization: quantization,
-    );
-    
-    notifyListeners();
+  Future<bool> verifyModelIntegrity(String modelId) async {
+    return await llmService. verifyModelChecksum(modelId);
   }
+}
+
+class AccumulatorSink<T> implements Sink<T> {
+  final List<T> events = [];
+  
+  @override
+  void add(T event) => events.add(event);
+  
+  @override
+  void close() {}
 }
