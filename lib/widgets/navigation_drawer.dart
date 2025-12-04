@@ -17,24 +17,40 @@ class NavigationDrawer extends StatelessWidget {
         color: Colors.black,
         child: Column(
           children: [
-            const DrawerHeader(
-              decoration: BoxDecoration(
-                color: Colors.black,
+            DrawerHeader(
+              decoration: const BoxDecoration(
+                color: Colors. black,
               ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(
-                    Icons.psychology,
-                    size: 50,
-                    color: Colors.blue,
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blue. shade900,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.psychology,
+                      size: 40,
+                      color: Colors.blue,
+                    ),
                   ),
-                  SizedBox(height: 10),
-                  Text(
+                  const SizedBox(height: 12),
+                  const Text(
                     'Local LLM Chat',
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 24,
+                      fontSize: 22,
+                      fontWeight: FontWeight. bold,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'by HATOP-OC',
+                    style: TextStyle(
+                      color: Colors.grey.shade500,
+                      fontSize: 12,
                     ),
                   ),
                 ],
@@ -47,25 +63,25 @@ class NavigationDrawer extends StatelessWidget {
                   _buildNavItem(
                     context,
                     index: 0,
-                    title: 'Чати',
+                    title: 'Chats',
                     icon: Icons.chat_bubble_outline,
                   ),
                   _buildNavItem(
                     context,
                     index: 1,
-                    title: 'Моделі',
+                    title: 'Models',
                     icon: Icons.model_training,
                   ),
                   _buildNavItem(
                     context,
                     index: 2,
-                    title: 'Налаштування',
+                    title: 'Settings',
                     icon: Icons.settings_outlined,
                   ),
                   _buildNavItem(
                     context,
                     index: 3,
-                    title: 'Про додаток',
+                    title: 'About',
                     icon: Icons.info_outline,
                   ),
                 ],
@@ -73,10 +89,22 @@ class NavigationDrawer extends StatelessWidget {
             ),
             const Divider(color: Colors.grey),
             Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Text(
-                'v1.0.0',
-                style: TextStyle(color: Colors.grey[600]),
+              padding: const EdgeInsets. all(16.0),
+              child: Column(
+                children: [
+                  Text(
+                    'v1.0.0',
+                    style: TextStyle(color: Colors.grey. shade600),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Developed by HATOP-OC',
+                    style: TextStyle(
+                      color: Colors.grey. shade600,
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -96,15 +124,15 @@ class NavigationDrawer extends StatelessWidget {
     return ListTile(
       leading: Icon(
         icon,
-        color: isSelected ? Colors.blue : Colors.white,
+        color: isSelected ? Colors. blue : Colors.white,
       ),
       title: Text(
         title,
         style: TextStyle(
-          color: isSelected ? Colors.blue : Colors.white,
+          color: isSelected ? Colors. blue : Colors.white,
         ),
       ),
-      tileColor: isSelected ? Colors.blue.withValues(alpha: 0.1) : null,
+      tileColor: isSelected ? Colors.blue. withValues(alpha: 0.1) : null,
       onTap: () {
         onItemTapped(index);
         Navigator.pop(context);

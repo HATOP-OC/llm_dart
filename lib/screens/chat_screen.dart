@@ -8,7 +8,7 @@ import '../services/prompt_manager.dart';
 import '../widgets/chat_bubble.dart';
 
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key});
+  const ChatScreen({super. key});
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -20,6 +20,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isGenerating = false;
   String?  _currentStreamId;
   String _currentGeneratedText = "";
+  bool _showArchived = false;
 
   @override
   void dispose() {
@@ -30,13 +31,15 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _scrollToBottom() {
-    if (_scrollController.hasClients) {
-      _scrollController.animateTo(
-        _scrollController.position. maxScrollExtent,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
-    }
+    WidgetsBinding. instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position. maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves. easeOut,
+        );
+      }
+    });
   }
 
   void _stopGeneration() {
@@ -71,7 +74,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (modelManager.activeModel == null) {
       await chatStorage.addMessage(
         currentChat.id!,
-        "Помилка: Будь ласка, завантажте та активуйте модель у розділі 'Моделі'.",
+        "Error: Please download and activate a model in the 'Models' section.",
         false,
       );
       setState(() {
@@ -81,7 +84,6 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     
-    // Add an empty message for the assistant's response
     await chatStorage.addMessage(currentChat.id!, "", false);
     _scrollToBottom();
 
@@ -89,18 +91,16 @@ class _ChatScreenState extends State<ChatScreen> {
       _currentStreamId = DateTime.now().millisecondsSinceEpoch.toString();
 
       final allMessages = chatStorage.getChatById(currentChat.id!)!. messages;
-
-      // The history is all messages except the last two (the user's new message and the empty assistant message)
-      final historyMessages = allMessages.length > 2 ? allMessages.sublist(0, allMessages.length - 2) : [];
+      final historyMessages = allMessages.length > 2 
+          ? allMessages. sublist(0, allMessages.length - 2) 
+          : [];
       
       final history = historyMessages
           .map((m) => (m.isUser ? 'User: ' : 'Assistant: ') + m.content)
           .join('\n');
       
-      // Отримуємо назву активної моделі
-      final modelName = modelManager. activeModel?. name ?? 'llama';
+      final modelName = modelManager.activeModel?. name ?? 'llama';
       
-      // Формуємо промпт з правильним форматом для моделі та мови
       final fullPrompt = PromptManager.formatPromptWithHistory(
         messageContent, 
         history, 
@@ -135,10 +135,10 @@ class _ChatScreenState extends State<ChatScreen> {
             onError: (error) async {
               final chat = chatStorage. getChatById(currentChat.id!);
               if (chat != null && chat. messages.isNotEmpty) {
-                  final lastMessage = chat.messages.last;
-                  await chatStorage.updateMessage(
-                  lastMessage.id! ,
-                  "Помилка генерації відповіді: $error",
+                final lastMessage = chat. messages.last;
+                await chatStorage. updateMessage(
+                  lastMessage.id!,
+                  "Error generating response: $error",
                 );
               }
               setState(() {
@@ -154,7 +154,7 @@ class _ChatScreenState extends State<ChatScreen> {
         final lastMessage = chat. messages.last;
         await chatStorage. updateMessage(
           lastMessage.id! ,
-          "Помилка: ${e.toString()}",
+          "Error: ${e.toString()}",
         );
       }
       setState(() {
@@ -165,68 +165,332 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  void _showChatHistory(BuildContext context) {
+    final chatStorage = Provider.of<ChatStorage>(context, listen: false);
+    
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.grey. shade900,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final displayChats = _showArchived 
+                ? chatStorage.archivedChats 
+                : chatStorage.chats;
+            
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.6,
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  // Handle bar
+                  Container(
+                    width: 40,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade600,
+                      borderRadius: BorderRadius. circular(2),
+                    ),
+                  ),
+                  // Header
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        _showArchived ? 'Archived Chats' : 'Chat History',
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight. bold,
+                          color: Colors.white,
+                        ),
+                      ),
+                      Row(
+                        children: [
+                          TextButton. icon(
+                            onPressed: () {
+                              setModalState(() {
+                                _showArchived = ! _showArchived;
+                              });
+                            },
+                            icon: Icon(
+                              _showArchived ? Icons.chat : Icons.archive,
+                              color: Colors.blue,
+                              size: 20,
+                            ),
+                            label: Text(
+                              _showArchived ?  'Active' : 'Archived',
+                              style: const TextStyle(color: Colors.blue),
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.add, color: Colors.blue),
+                            onPressed: () {
+                              chatStorage.createChat('New Chat');
+                              Navigator.pop(context);
+                            },
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  // Chat list
+                  Expanded(
+                    child: displayChats.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  _showArchived ? Icons.archive_outlined : Icons.chat_bubble_outline,
+                                  size: 48,
+                                  color: Colors.grey.shade600,
+                                ),
+                                const SizedBox(height: 16),
+                                Text(
+                                  _showArchived 
+                                      ?  'No archived chats' 
+                                      : 'No chats yet.  Create one! ',
+                                  style: TextStyle(color: Colors.grey. shade500),
+                                ),
+                              ],
+                            ),
+                          )
+                        : ListView.builder(
+                            itemCount: displayChats. length,
+                            itemBuilder: (context, index) {
+                              final chat = displayChats[index];
+                              final isSelected = chat.id == chatStorage.currentChat?. id;
+                              final lastMessage = chat.messages.isNotEmpty 
+                                  ?  chat.messages.last. content 
+                                  : 'No messages';
+                              
+                              return Card(
+                                color: isSelected 
+                                    ?  Colors.blue.shade900 
+                                    : Colors.grey. shade800,
+                                margin: const EdgeInsets.only(bottom: 8),
+                                child: ListTile(
+                                  leading: CircleAvatar(
+                                    backgroundColor: isSelected 
+                                        ? Colors. blue 
+                                        : Colors.grey.shade700,
+                                    child: Icon(
+                                      _showArchived ?  Icons.archive : Icons.chat,
+                                      color: Colors.white,
+                                      size: 20,
+                                    ),
+                                  ),
+                                  title: Text(
+                                    chat.title,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight. w500,
+                                    ),
+                                  ),
+                                  subtitle: Text(
+                                    lastMessage. length > 40 
+                                        ? '${lastMessage.substring(0, 40)}...' 
+                                        : lastMessage,
+                                    style: TextStyle(color: Colors.grey.shade400),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  trailing: PopupMenuButton<String>(
+                                    icon: Icon(Icons.more_vert, color: Colors.grey.shade400),
+                                    color: Colors.grey. shade800,
+                                    onSelected: (value) {
+                                      if (value == 'archive') {
+                                        chatStorage.archiveChat(chat.id!, ! _showArchived);
+                                        setModalState(() {});
+                                      } else if (value == 'delete') {
+                                        chatStorage.deleteChat(chat.id!);
+                                        Navigator.pop(context);
+                                      }
+                                    },
+                                    itemBuilder: (context) => [
+                                      PopupMenuItem(
+                                        value: 'archive',
+                                        child: Row(
+                                          children: [
+                                            Icon(
+                                              _showArchived ?  Icons.unarchive : Icons. archive,
+                                              color: Colors. white,
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Text(
+                                              _showArchived ?  'Unarchive' : 'Archive',
+                                              style: const TextStyle(color: Colors.white),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const PopupMenuItem(
+                                        value: 'delete',
+                                        child: Row(
+                                          children: [
+                                            Icon(Icons.delete, color: Colors.red),
+                                            SizedBox(width: 8),
+                                            Text('Delete', style: TextStyle(color: Colors.red)),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  onTap: () {
+                                    if (! _showArchived) {
+                                      chatStorage.setCurrentChat(chat);
+                                    }
+                                    Navigator.pop(context);
+                                  },
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
+        // Header with chat tabs
         Container(
-          height: 50,
-          color: Colors.grey[900],
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: Colors. grey.shade900,
+            border: Border(bottom: BorderSide(color: Colors.grey.shade800)),
+          ),
           child: Consumer<ChatStorage>(
             builder: (context, chatStorage, child) {
-              return ListView.builder(
-                scrollDirection: Axis. horizontal,
-                itemCount: chatStorage.chats.length,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                itemBuilder: (context, index) {
-                  final chat = chatStorage. chats[index];
-                  final isSelected = chat.id == chatStorage.currentChat?.id;
+              return Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.history, color: Colors. white),
+                    onPressed: () => _showChatHistory(context),
+                    tooltip: 'Chat History',
+                  ),
+                  Expanded(
+                    child: SizedBox(
+                      height: 40,
+                      child: ListView.builder(
+                        scrollDirection: Axis. horizontal,
+                        itemCount: chatStorage.chats.length,
+                        itemBuilder: (context, index) {
+                          final chat = chatStorage.chats[index];
+                          final isSelected = chat. id == chatStorage. currentChat?.id;
 
-                  return GestureDetector(
-                    onTap: () {
-                      chatStorage.setCurrentChat(chat);
-                    },
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(
-                        horizontal: 4,
-                        vertical: 8,
-                      ),
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      decoration: BoxDecoration(
-                        color: isSelected
-                            ? Colors. blue. shade800
-                            : Colors.grey. shade800,
-                        borderRadius: BorderRadius. circular(20),
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        chat.title,
-                        style: TextStyle(
-                          color: isSelected ?  Colors.white : Colors.grey[300],
-                        ),
+                          return GestureDetector(
+                            onTap: () {
+                              chatStorage.setCurrentChat(chat);
+                            },
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(horizontal: 4),
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? Colors.blue. shade700
+                                    : Colors.grey.shade800,
+                                borderRadius: BorderRadius.circular(20),
+                                border: isSelected 
+                                    ?  Border.all(color: Colors.blue.shade400, width: 1)
+                                    : null,
+                              ),
+                              alignment: Alignment.center,
+                              child: Text(
+                                chat.title. length > 15 
+                                    ? '${chat.title. substring(0, 15)}...'
+                                    : chat.title,
+                                style: TextStyle(
+                                  color: isSelected ?  Colors.white : Colors.grey.shade300,
+                                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
                       ),
                     ),
-                  );
-                },
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.add_circle_outline, color: Colors.blue),
+                    onPressed: () {
+                      chatStorage.createChat('New Chat');
+                    },
+                    tooltip: 'New Chat',
+                  ),
+                ],
               );
             },
           ),
         ),
 
+        // Messages area
         Expanded(
           child: Consumer<ChatStorage>(
             builder: (context, chatStorage, child) {
               final currentChat = chatStorage. currentChat;
 
               if (currentChat == null) {
-                return const Center(
-                  child: Text('Create a new chat to start talking'),
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.chat_bubble_outline, size: 64, color: Colors.grey.shade600),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Create a new chat to start',
+                        style: TextStyle(color: Colors.grey. shade500, fontSize: 16),
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton. icon(
+                        onPressed: () {
+                          chatStorage.createChat('New Chat');
+                        },
+                        icon: const Icon(Icons.add),
+                        label: const Text('New Chat'),
+                      ),
+                    ],
+                  ),
                 );
               }
 
-              final chat = chatStorage. getChatById(currentChat.id!);
+              final chat = chatStorage.getChatById(currentChat.id!);
               if (chat == null) {
                 return const Center(child: Text('Chat not found'));
+              }
+
+              if (chat.messages. isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.psychology, size: 80, color: Colors. blue.shade400),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'How can I help you today?',
+                        style: TextStyle(color: Colors.white, fontSize: 20),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Type a message below to start chatting',
+                        style: TextStyle(color: Colors.grey.shade500),
+                      ),
+                    ],
+                  ),
+                );
               }
 
               return ListView.builder(
@@ -243,16 +507,21 @@ class _ChatScreenState extends State<ChatScreen> {
                       alignment: Alignment.centerLeft,
                       child: Container(
                         constraints: BoxConstraints(
-                          maxWidth: MediaQuery.of(context).size.width * 0.75,
+                          maxWidth: MediaQuery.of(context).size. width * 0.80,
                         ),
                         margin: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 4,
+                          horizontal: 12,
+                          vertical: 6,
                         ),
-                        padding: const EdgeInsets.all(12),
+                        padding: const EdgeInsets.all(14),
                         decoration: BoxDecoration(
-                          color: Colors.grey. shade800,
-                          borderRadius: BorderRadius. circular(16),
+                          color: const Color(0xFF2D2D2D),
+                          borderRadius: const BorderRadius.only(
+                            topLeft: Radius.circular(18),
+                            topRight: Radius. circular(18),
+                            bottomLeft: Radius.circular(4),
+                            bottomRight: Radius. circular(18),
+                          ),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -261,9 +530,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                 ? AnimatedTextKit(
                                     animatedTexts: [
                                       WavyAnimatedText(
-                                        'Generating response.. .',
+                                        'Thinking...',
                                         textStyle: const TextStyle(
-                                          color: Colors. white,
+                                          color: Colors.white,
                                         ),
                                       ),
                                     ],
@@ -272,14 +541,14 @@ class _ChatScreenState extends State<ChatScreen> {
                                   )
                                 : Text(
                                     _currentGeneratedText,
-                                    style: const TextStyle(color: Colors.white),
+                                    style: const TextStyle(color: Colors.white, fontSize: 15),
                                   ),
-                            const SizedBox(height: 4),
+                            const SizedBox(height: 6),
                             Text(
                               _formatTime(DateTime.now()),
                               style: TextStyle(
-                                color: Colors.grey. shade400,
-                                fontSize: 12,
+                                color: Colors. grey.shade400,
+                                fontSize: 11,
                               ),
                             ),
                           ],
@@ -295,59 +564,61 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ),
 
+        // Input area
         Container(
           decoration: BoxDecoration(
-            color: Colors.grey[900],
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                blurRadius: 4,
-                spreadRadius: 2,
-              ),
-            ],
+            color: Colors.grey.shade900,
+            border: Border(top: BorderSide(color: Colors.grey.shade800)),
           ),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _textController,
-                  decoration: InputDecoration(
-                    hintText: 'Write a message...',
-                    hintStyle: TextStyle(color: Colors.grey[500]),
-                    filled: true,
-                    fillColor: Colors.grey[800],
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide.none,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: SafeArea(
+            top: false,
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _textController,
+                    decoration: InputDecoration(
+                      hintText: 'Type a message...',
+                      hintStyle: TextStyle(color: Colors. grey.shade500),
+                      filled: true,
+                      fillColor: Colors.grey.shade800,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide. none,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 12,
+                      ),
                     ),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 8,
+                    style: const TextStyle(color: Colors.white),
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _isGenerating ?  null : _sendMessage(),
+                    maxLines: null,
+                    enabled: ! _isGenerating,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: _isGenerating 
+                          ? [Colors.red.shade600, Colors.red.shade800]
+                          : [Colors.blue. shade500, Colors.blue. shade700],
                     ),
+                    shape: BoxShape.circle,
                   ),
-                  style: const TextStyle(color: Colors. white),
-                  textInputAction: TextInputAction.send,
-                  onSubmitted: (_) => _isGenerating ?  null : _sendMessage(),
-                  maxLines: null,
-                  enabled: ! _isGenerating,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Container(
-                decoration: BoxDecoration(
-                  color: _isGenerating ?  Colors.red : Colors.blue,
-                  shape: BoxShape.circle,
-                ),
-                child: IconButton(
-                  icon: Icon(
-                    _isGenerating ? Icons. stop : Icons.send,
-                    color: Colors.white,
+                  child: IconButton(
+                    icon: Icon(
+                      _isGenerating ? Icons.stop : Icons. send,
+                      color: Colors.white,
+                    ),
+                    onPressed: _isGenerating ? _stopGeneration : _sendMessage,
                   ),
-                  onPressed: _isGenerating ?  _stopGeneration : _sendMessage,
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ],
@@ -355,6 +626,6 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   String _formatTime(DateTime time) {
-    return '${time. hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    return '${time.hour.toString(). padLeft(2, '0')}:${time.minute. toString().padLeft(2, '0')}';
   }
 }

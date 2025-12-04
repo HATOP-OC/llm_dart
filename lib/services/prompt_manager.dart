@@ -1,25 +1,26 @@
 import 'dart:ui';
 
 class PromptManager {
-  // Системні промпти на різних мовах
   static final Map<String, String> _systemPrompts = {
     'en': '''You are assistant_oc, a helpful assistant. 
-Answer in the same language as the user's message. 
-Be brief and accurate. 
-Answer math questions with step-by-step calculations.''',
+Answer in the same language as the user's message.
+Be brief and accurate.
+For math questions, show step-by-step calculations.
+Use proper markdown formatting.''',
 
-    'uk': '''Ти assistant_oc, корисний помічник. 
+    'uk': '''Ти assistant_oc, корисний помічник.
 Відповідай тією ж мовою, що й користувач.
 Будь коротким і точним.
-На математичні питання відповідай з покроковими розрахунками.''',
+На математичні питання відповідай з покроковими розрахунками. 
+Використовуй правильне markdown форматування.''',
 
     'ru': '''Ты assistant_oc, полезный помощник.
 Отвечай на том же языке, что и пользователь.
 Будь кратким и точным.
-На математические вопросы отвечай с пошаговыми расчётами.''',
+На математические вопросы отвечай с пошаговыми расчётами.
+Используй правильное markdown форматирование.''',
   };
 
-  /// Визначити мову тексту
   static String detectLanguage(String text) {
     final cyrillicPattern = RegExp(r'[а-яА-ЯёЁіІїЇєЄґҐ]');
     final ukrainianPattern = RegExp(r'[іІїЇєЄґҐ]');
@@ -34,18 +35,15 @@ Answer math questions with step-by-step calculations.''',
     return 'en';
   }
 
-  /// Отримати системний промпт для мови повідомлення
   static String getSystemPromptForLanguage(String languageCode) {
-    return _systemPrompts[languageCode] ?? _systemPrompts['en']!;
+    return _systemPrompts[languageCode] ??  _systemPrompts['en']! ;
   }
 
-  /// Отримати системний промпт для мови пристрою
   static String getSystemPrompt() {
     final languageCode = PlatformDispatcher. instance.locale.languageCode;
     return _systemPrompts[languageCode] ?? _systemPrompts['en']!;
   }
 
-  /// Форматування промпту для Llama з історією
   static String formatForLlamaWithHistory(String userMessage, String history) {
     final detectedLang = detectLanguage(userMessage);
     final systemPrompt = getSystemPromptForLanguage(detectedLang);
@@ -72,7 +70,6 @@ $userMessage<|eot_id|><|start_header_id|>assistant<|end_header_id|>
 ''';
   }
 
-  /// Форматування промпту для Gemma з історією
   static String formatForGemmaWithHistory(String userMessage, String history) {
     final detectedLang = detectLanguage(userMessage);
     final systemPrompt = getSystemPromptForLanguage(detectedLang);
@@ -88,7 +85,6 @@ $userMessage<|eot_id|><|start_header_id|>assistant<|end_header_id|>
     return prompt;
   }
 
-  /// Форматування промпту для Phi з історією
   static String formatForPhiWithHistory(String userMessage, String history) {
     final detectedLang = detectLanguage(userMessage);
     final systemPrompt = getSystemPromptForLanguage(detectedLang);
@@ -104,7 +100,6 @@ $userMessage<|eot_id|><|start_header_id|>assistant<|end_header_id|>
     return prompt;
   }
 
-  /// Форматування промпту для ChatML з історією
   static String formatForChatMLWithHistory(String userMessage, String history) {
     final detectedLang = detectLanguage(userMessage);
     final systemPrompt = getSystemPromptForLanguage(detectedLang);
@@ -120,7 +115,30 @@ $userMessage<|eot_id|><|start_header_id|>assistant<|end_header_id|>
     return prompt;
   }
 
-  /// Автоматичне визначення формату за назвою моделі (з історією)
+  /// Формат для Qwen моделей
+  static String formatForQwenWithHistory(String userMessage, String history) {
+    final detectedLang = detectLanguage(userMessage);
+    final systemPrompt = getSystemPromptForLanguage(detectedLang);
+    
+    String prompt = '<|im_start|>system\n$systemPrompt<|im_end|>\n';
+    
+    if (history.isNotEmpty) {
+      // Парсимо історію в окремі повідомлення
+      final lines = history.split('\n');
+      for (final line in lines) {
+        if (line.startsWith('User: ')) {
+          prompt += '<|im_start|>user\n${line. substring(6)}<|im_end|>\n';
+        } else if (line.startsWith('Assistant: ')) {
+          prompt += '<|im_start|>assistant\n${line.substring(11)}<|im_end|>\n';
+        }
+      }
+    }
+    
+    prompt += '<|im_start|>user\n$userMessage<|im_end|>\n<|im_start|>assistant\n';
+    
+    return prompt;
+  }
+
   static String formatPromptWithHistory(String userMessage, String history, String modelName) {
     final lowerName = modelName.toLowerCase();
     
@@ -130,35 +148,31 @@ $userMessage<|eot_id|><|start_header_id|>assistant<|end_header_id|>
       return formatForPhiWithHistory(userMessage, history);
     } else if (lowerName.contains('llama')) {
       return formatForLlamaWithHistory(userMessage, history);
-    } else if (lowerName.contains('mistral') || lowerName. contains('qwen')) {
+    } else if (lowerName.contains('qwen')) {
+      return formatForQwenWithHistory(userMessage, history);
+    } else if (lowerName. contains('mistral')) {
       return formatForChatMLWithHistory(userMessage, history);
     }
     
-    // За замовчуванням — Llama формат
     return formatForLlamaWithHistory(userMessage, history);
   }
 
-  /// Форматування промпту для Llama (без історії)
   static String formatForLlama(String userMessage) {
     return formatForLlamaWithHistory(userMessage, '');
   }
 
-  /// Форматування промпту для Gemma (без історії)
   static String formatForGemma(String userMessage) {
     return formatForGemmaWithHistory(userMessage, '');
   }
 
-  /// Форматування промпту для Phi (без історії)
   static String formatForPhi(String userMessage) {
     return formatForPhiWithHistory(userMessage, '');
   }
 
-  /// Форматування промпту для ChatML (без історії)
   static String formatForChatML(String userMessage) {
     return formatForChatMLWithHistory(userMessage, '');
   }
 
-  /// Автоматичне визначення формату за назвою моделі (без історії)
   static String formatPrompt(String userMessage, String modelName) {
     return formatPromptWithHistory(userMessage, '', modelName);
   }
