@@ -78,7 +78,6 @@ class ModelManager extends ChangeNotifier {
     _isInitialized = true;
     notifyListeners();
     
-    // Завантажуємо активну модель після ініціалізації UI
     _reloadActiveModel();
   }
   
@@ -93,7 +92,6 @@ class ModelManager extends ChangeNotifier {
     
     final model = _models[modelIndex];
     
-    // Перевіряємо чи файл існує
     final modelsDir = await _getModelsDirectory();
     final modelFile = File('${modelsDir.path}/${model.id}.bin');
     
@@ -142,7 +140,6 @@ class ModelManager extends ChangeNotifier {
       if (await modelFile.exists()) {
         final fileSize = await modelFile.length();
         
-        // Файл пошкоджений якщо менше 95% очікуваного
         if (fileSize < model.size * 0.95) {
           debugPrint('Incomplete file: ${model.id}');
           await modelFile.delete();
@@ -153,7 +150,6 @@ class ModelManager extends ChangeNotifier {
       }
     }
     
-    // Очищуємо . tmp файли
     await _cleanupTempFiles(modelsDir);
   }
   
@@ -197,8 +193,7 @@ class ModelManager extends ChangeNotifier {
     final tempFile = File('${modelsDir.path}/${model.id}.tmp');
     final finalFile = File('${modelsDir.path}/${model.id}.bin');
     
-    // Видаляємо попередні файли
-    if (await tempFile. exists()) await tempFile.delete();
+    if (await tempFile.exists()) await tempFile.delete();
     if (await finalFile.exists()) await finalFile.delete();
     
     _models[modelIndex] = model.copyWith(
@@ -207,7 +202,6 @@ class ModelManager extends ChangeNotifier {
     );
     notifyListeners();
     
-    // Потоковий checksum
     final checksumOutput = AccumulatorSink<Digest>();
     final checksumInput = sha256.startChunkedConversion(checksumOutput);
     _checksumOutputs[modelId] = checksumOutput;
@@ -284,7 +278,6 @@ class ModelManager extends ChangeNotifier {
     await sink?.flush();
     await sink?.close();
     
-    // Перевіряємо розмір
     if (! await tempFile.exists()) {
       _onDownloadFailed(modelId, modelIndex, model, client);
       return;
@@ -297,7 +290,6 @@ class ModelManager extends ChangeNotifier {
       return;
     }
     
-    // Зберігаємо checksum
     try {
       _checksumSinks[modelId]?.close();
       final digest = _checksumOutputs[modelId]?.events.single;
@@ -308,11 +300,9 @@ class ModelManager extends ChangeNotifier {
     
     _cleanupChecksumResources(modelId);
     
-    // Переміщуємо файл
     try {
       await tempFile.rename(finalFile.path);
     } catch (_) {
-      // Fallback: копіюємо потоково
       await tempFile.openRead().pipe(finalFile.openWrite());
       await tempFile.delete();
     }
@@ -429,7 +419,6 @@ class ModelManager extends ChangeNotifier {
       return false;
     }
     
-    // Перевіряємо файл
     final modelsDir = await _getModelsDirectory();
     final modelFile = File('${modelsDir.path}/${model.id}.bin');
     
@@ -452,7 +441,6 @@ class ModelManager extends ChangeNotifier {
       return false;
     }
 
-    // Деактивуємо попередню
     if (_activeModelId != null && _activeModelId != modelId) {
       final oldIndex = _models.indexWhere((m) => m.id == _activeModelId);
       if (oldIndex != -1) {

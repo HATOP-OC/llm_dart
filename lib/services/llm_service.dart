@@ -9,14 +9,15 @@ import '../ffi/llama_bindings.dart';
 import '../ffi/llama_types.dart';
 import '../models/llm_model.dart';
 
-class LlmService {
+class LlmService extends ChangeNotifier {
   static final LlmService _instance = LlmService._internal();
   factory LlmService() => _instance;
   
-  LlamaBindings?  _bindings;
+  LlamaBindings? _bindings;
   int?  _currentModelId;
   Pointer<LlamaDartContext>? _currentContext;
-  int _contextLength = 1024;
+  int _contextLength = 2048;
+  int _usedTokens = 0;
   final Map<String, StreamController<String>> _generationControllers = {};
   bool _isGenerating = false;
   bool _shouldStop = false;
@@ -35,6 +36,8 @@ class LlmService {
   bool get isModelLoaded => _currentModelId != null && _currentContext != null;
   bool get isInitialized => _isInitialized;
   int get contextLength => _contextLength;
+  int get usedTokens => _usedTokens;
+  double get contextUsage => _contextLength > 0 ? _usedTokens / _contextLength : 0;
   
   Future<void> init() async {
     if (_isInitialized) return;
@@ -42,9 +45,9 @@ class LlmService {
     try {
       _bindings = LlamaBindings();
       final prefs = await SharedPreferences.getInstance();
-      _contextLength = prefs. getInt('context_length') ?? 1024;
+      _contextLength = prefs. getInt('context_length') ?? 2048;
       _isInitialized = true;
-      debugPrint('LlmService initialized');
+      debugPrint('LlmService initialized, context_length: $_contextLength');
     } catch (e) {
       debugPrint('Error initializing LlmService: $e');
       _isInitialized = false;
@@ -53,23 +56,31 @@ class LlmService {
   
   void setContextLength(int length) {
     _contextLength = length;
+    debugPrint('Context length set to: $length (requires model reload)');
   }
   
-  /// Завантажує модель
+  void clearContext() {
+    _usedTokens = 0;
+    notifyListeners();
+    debugPrint('Context cleared');
+  }
+  
   Future<bool> loadModel(LlmModel model) async {
     debugPrint('Loading model: ${model.id}');
     
-    // Ініціалізація якщо потрібно
     if (!_isInitialized || _bindings == null) {
       await init();
-      if (!_isInitialized || _bindings == null) {
+      if (! _isInitialized || _bindings == null) {
         debugPrint('Failed to initialize LlmService');
         return false;
       }
     }
     
-    // Звільняємо попередню модель
-    unloadCurrentModel();
+    final prefs = await SharedPreferences.getInstance();
+    _contextLength = prefs. getInt('context_length') ?? 2048;
+    
+    _cleanup();
+    _usedTokens = 0;
     
     final modelsDir = await _getModelsDirectory();
     final modelPath = '${modelsDir.path}/${model.id}.bin';
@@ -81,9 +92,8 @@ class LlmService {
     }
     
     try {
-      debugPrint('Loading model with MMAP enabled');
+      debugPrint('Loading with context_length: $_contextLength');
       
-      // Завантажуємо модель
       _currentModelId = _bindings!.loadModel(
         modelPath,
         quantizationType: model.quantization == QuantizationType.bit4 ? 4 : 8,
@@ -98,7 +108,6 @@ class LlmService {
       
       debugPrint('Model loaded, ID: $_currentModelId');
       
-      // Створюємо контекст
       _currentContext = _bindings!.createContext(
         _currentModelId!,
         contextLength: _contextLength,
@@ -107,13 +116,13 @@ class LlmService {
       
       if (_currentContext == null || _currentContext == nullptr) {
         debugPrint('Failed to create context');
-        _bindings! .freeModel(_currentModelId! );
+        _bindings! .freeModel(_currentModelId!);
         _currentModelId = null;
         return false;
       }
       
-      debugPrint('Context created successfully');
-      debugPrint('Model ready: ${model.name}');
+      notifyListeners();
+      debugPrint('Model ready: ${model.name}, context: $_contextLength');
       return true;
       
     } catch (e) {
@@ -148,6 +157,12 @@ class LlmService {
     
     try {
       final tokens = _bindings!.tokenize(_currentContext!, prompt);
+      
+      final inputTokens = tokens.ref.nTokens;
+      _usedTokens = inputTokens + maxTokens;
+      notifyListeners();
+      
+      debugPrint('Input tokens: $inputTokens, context usage: $_usedTokens/$_contextLength');
       
       final result = _bindings!.generate(
         _currentContext!,
@@ -189,7 +204,7 @@ class LlmService {
     StreamController<String> controller,
     String streamId,
   ) async {
-    if (! isModelLoaded) {
+    if (!isModelLoaded) {
       controller.addError('Model not loaded');
       await controller.close();
       _generationControllers. remove(streamId);
@@ -207,7 +222,6 @@ class LlmService {
         return;
       }
       
-      // Стрімимо по частинах для плавності UI
       String accumulated = '';
       const int chunkSize = 5;
       
@@ -217,7 +231,6 @@ class LlmService {
         final end = (i + chunkSize < result.length) ?  i + chunkSize : result.length;
         accumulated += result.substring(i, end);
         
-        // Перевірка на стоп-послідовності
         bool shouldStop = false;
         for (final stop in _stopSequences) {
           if (accumulated.endsWith(stop)) {
@@ -273,6 +286,8 @@ class LlmService {
   void unloadCurrentModel() {
     debugPrint('Unloading model...');
     _cleanup();
+    _usedTokens = 0;
+    notifyListeners();
     debugPrint('Model unloaded');
   }
   
@@ -287,11 +302,9 @@ class LlmService {
     return modelsDir;
   }
   
-  // ============ Checksum (тільки для завантаження) ============
-  
   Future<void> saveModelChecksum(String modelId, String checksum) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs. setString('checksum_$modelId', checksum);
+    await prefs.setString('checksum_$modelId', checksum);
   }
   
   Future<String?> getStoredChecksum(String modelId) async {
@@ -299,7 +312,6 @@ class LlmService {
     return prefs.getString('checksum_$modelId');
   }
   
-  /// Верифікація - тільки якщо користувач явно попросив
   Future<bool> verifyModelChecksum(String modelId) async {
     try {
       final storedChecksum = await getStoredChecksum(modelId);
@@ -310,7 +322,6 @@ class LlmService {
       
       if (!await modelFile. exists()) return false;
       
-      // Потокове хешування
       final output = AccumulatorSink<Digest>();
       final input = sha256.startChunkedConversion(output);
       

@@ -10,29 +10,16 @@
 #define LOGI(... ) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// Глобальні змінні для зберігання моделей та контекстів
 static std::map<int32_t, llama_model*> g_models;
 static std::map<int64_t, llama_context*> g_contexts;
 static int32_t g_next_model_id = 1;
 static int64_t g_next_context_id = 1;
 
-// Стоп-послідовності для зупинки генерації
 static const std::vector<std::string> STOP_SEQUENCES = {
-    "User:",
-    "\nUser:",
-    "Human:",
-    "\nHuman:",
-    "Assistant:",
-    "\nAssistant:",
-    "<|im_end|>",
-    "<|im_start|>",
-    "<end_of_turn>",
-    "<start_of_turn>",
-    "<|eot_id|>",
-    "<|end|>",
-    "</s>",
-    "<|assistant|>",
-    "<|user|>",
+    "User:", "\nUser:", "Human:", "\nHuman:",
+    "Assistant:", "\nAssistant:",
+    "<|im_end|>", "<|im_start|>", "<end_of_turn>", "<start_of_turn>",
+    "<|eot_id|>", "<|end|>", "</s>", "<|assistant|>", "<|user|>",
 };
 
 extern "C" {
@@ -41,13 +28,8 @@ int32_t llama_dart_load_model(const char* path, llama_dart_model_params* params)
     try {
         llama_model_params model_params = llama_model_default_params();
         model_params.n_gpu_layers = params->nGpuLayers;
-        
-        // ═══════════════════════════════════════════════════════════════
-        // ОПТИМІЗАЦІЯ RAM: MMAP
-        // ═══════════════════════════════════════════════════════════════
-        model_params.use_mmap = true;
+        model_params. use_mmap = true;
         model_params.use_mlock = false;
-        // ═══════════════════════════════════════════════════════════════
         
         LOGI("Loading model from: %s", path);
         LOGI("MMAP: enabled (RAM optimized)");
@@ -79,20 +61,13 @@ llama_dart_context* llama_dart_create_context(int32_t model_id, llama_dart_conte
         }
         
         llama_context_params ctx_params = llama_context_default_params();
-        
-        // ═══════════════════════════════════════════════════════════════
-        // ОПТИМІЗАЦІЯ CPU: ~50% замість 100%
-        // ═══════════════════════════════════════════════════════════════
-        ctx_params.n_ctx = params->nCtx > 0 ? params->nCtx : 1024;
+        ctx_params.n_ctx = params->nCtx > 0 ? params->nCtx : 2048;
         ctx_params.n_batch = params->nBatch > 0 ? params->nBatch : 256;
         ctx_params.n_threads = params->nThreads > 0 ? params->nThreads : 2;
         ctx_params.n_threads_batch = params->nThreads > 0 ? params->nThreads : 2;
-        // ═══════════════════════════════════════════════════════════════
         
-        LOGI("Creating context:");
-        LOGI("  n_ctx: %d (context window)", ctx_params. n_ctx);
-        LOGI("  n_batch: %d (batch size)", ctx_params. n_batch);
-        LOGI("  n_threads: %d (~50%% CPU)", ctx_params.n_threads);
+        LOGI("Creating context: n_ctx=%d, n_batch=%d, n_threads=%d", 
+             ctx_params.n_ctx, ctx_params. n_batch, ctx_params.n_threads);
         
         llama_context* ctx = llama_init_from_model(it->second, ctx_params);
         if (!ctx) {
@@ -133,19 +108,15 @@ llama_dart_tokens* llama_dart_tokenize(llama_dart_context* ctx, const char* text
         const llama_vocab* vocab = llama_model_get_vocab(model);
         
         size_t text_len = strlen(text);
-        
         int max_tokens = text_len * 2 + 256;
         std::vector<llama_token> tokens(max_tokens);
         
         int n_tokens = llama_tokenize(vocab, text, text_len, tokens. data(), max_tokens, true, false);
         
         if (n_tokens < 0) {
-            LOGE("Tokenization failed or buffer too small, needed: %d", -n_tokens);
-            if (-n_tokens > max_tokens) {
-                max_tokens = -n_tokens;
-                tokens.resize(max_tokens);
-                n_tokens = llama_tokenize(vocab, text, text_len, tokens. data(), max_tokens, true, false);
-            }
+            max_tokens = -n_tokens;
+            tokens.resize(max_tokens);
+            n_tokens = llama_tokenize(vocab, text, text_len, tokens.data(), max_tokens, true, false);
         }
         
         if (n_tokens <= 0) {
@@ -171,7 +142,6 @@ llama_dart_tokens* llama_dart_tokenize(llama_dart_context* ctx, const char* text
     }
 }
 
-// Перевірка на стоп-послідовності
 static bool check_stop_sequence(const std::string& text) {
     for (const auto& stop : STOP_SEQUENCES) {
         if (text.length() >= stop.length()) {
@@ -183,7 +153,6 @@ static bool check_stop_sequence(const std::string& text) {
     return false;
 }
 
-// Видалення стоп-послідовності з кінця тексту
 static std::string remove_stop_sequence(const std::string& text) {
     for (const auto& stop : STOP_SEQUENCES) {
         if (text.length() >= stop.length()) {
@@ -202,7 +171,7 @@ char* llama_dart_generate(llama_dart_context* ctx, llama_dart_tokens* tokens, ll
             return nullptr;
         }
         
-        auto it = g_contexts. find(ctx->handle);
+        auto it = g_contexts.find(ctx->handle);
         if (it == g_contexts.end()) {
             LOGE("Context handle %ld not found", ctx->handle);
             return nullptr;
@@ -212,114 +181,149 @@ char* llama_dart_generate(llama_dart_context* ctx, llama_dart_tokens* tokens, ll
         const llama_model* model = llama_get_model(llama_ctx);
         const llama_vocab* vocab = llama_model_get_vocab(model);
         
-        // Очищуємо пам'ять контексту перед новою генерацією
+        const int n_ctx = llama_n_ctx(llama_ctx);
+        const int max_gen_tokens = std::min(params->maxTokens, 512);
+        
+        LOGI("Context size: %d, input tokens: %d, max gen: %d", n_ctx, tokens->nTokens, max_gen_tokens);
+        
+        // Очищуємо KV-cache через llama_memory_clear
         llama_memory_t memory = llama_get_memory(llama_ctx);
         if (memory) {
             llama_memory_clear(memory, true);
+            LOGI("KV-cache cleared via llama_memory_clear");
+        }
+        
+        // Перевіряємо чи вхідні токени поміщаються в контекст
+        int input_tokens_count = tokens->nTokens;
+        if (input_tokens_count + max_gen_tokens > n_ctx) {
+            int max_input = n_ctx - max_gen_tokens - 64;
+            if (max_input < 64) max_input = 64;
+            
+            if (input_tokens_count > max_input) {
+                LOGI("Truncating input from %d to %d tokens", input_tokens_count, max_input);
+                input_tokens_count = max_input;
+            }
         }
         
         std::string result_text;
         
         try {
             std::vector<llama_token> input_tokens;
-            for (int i = 0; i < tokens->nTokens; i++) {
+            int start_idx = tokens->nTokens - input_tokens_count;
+            for (int i = start_idx; i < tokens->nTokens; i++) {
                 input_tokens.push_back(tokens->tokens[i]);
             }
+            
+            LOGI("Processing %zu input tokens", input_tokens.size());
             
             llama_batch batch = llama_batch_get_one(input_tokens. data(), input_tokens.size());
             
             int ret = llama_decode(llama_ctx, batch);
             if (ret != 0) {
                 LOGE("Failed to decode tokens, error: %d", ret);
-                result_text = "Error: Failed to process input tokens. ";
-            } else {
-                llama_sampler_chain_params sampler_params = llama_sampler_chain_default_params();
-                llama_sampler* sampler = llama_sampler_chain_init(sampler_params);
                 
-                // Налаштування семплера
-                llama_sampler_chain_add(sampler, llama_sampler_init_temp(params->temperature));
-                llama_sampler_chain_add(sampler, llama_sampler_init_top_k((int)params->topK));
-                llama_sampler_chain_add(sampler, llama_sampler_init_top_p(params->topP, 1));
-                
-                // penalty_last_n = 64 означає враховувати останні 64 токени для штрафів
-                llama_sampler_chain_add(sampler, llama_sampler_init_penalties(
-                    64,                       // penalty_last_n
-                    params->repeatPenalty,    // repeat penalty
-                    params->frequencyPenalty, // frequency penalty
-                    params->presencePenalty   // presence penalty
-                ));
-                llama_sampler_chain_add(sampler, llama_sampler_init_dist(params->seed));
-                
-                std::vector<llama_token> generated_tokens;
-                int max_tokens = std::min(params->maxTokens, 512);
-                
-                LOGI("Starting generation, max_tokens: %d", max_tokens);
-                
-                for (int i = 0; i < max_tokens; i++) {
-                    llama_token next_token = llama_sampler_sample(sampler, llama_ctx, -1);
+                // Fallback з меншою кількістю токенів
+                if (input_tokens.size() > 256) {
+                    LOGI("Retrying with fewer tokens.. .");
                     
-                    // Перевірка на кінець генерації
-                    if (llama_vocab_is_eog(vocab, next_token)) {
-                        LOGI("End of generation token reached at step %d", i);
-                        break;
+                    if (memory) {
+                        llama_memory_clear(memory, true);
                     }
                     
-                    generated_tokens.push_back(next_token);
-                    llama_sampler_accept(sampler, next_token);
+                    std::vector<llama_token> reduced_tokens(
+                        input_tokens.end() - 256, 
+                        input_tokens.end()
+                    );
                     
-                    // Перевіряємо на стоп-послідовності кожні 10 токенів
-                    if (i % 10 == 0 && ! generated_tokens.empty()) {
-                        std::vector<char> temp_buffer(generated_tokens.size() * 10);
-                        int temp_len = llama_detokenize(vocab, generated_tokens. data(), generated_tokens.size(),
-                                                       temp_buffer.data(), temp_buffer. size(), true, false);
-                        if (temp_len > 0) {
-                            std::string temp_text(temp_buffer.data(), temp_len);
-                            if (check_stop_sequence(temp_text)) {
-                                LOGI("Stop sequence detected at step %d", i);
-                                break;
-                            }
+                    batch = llama_batch_get_one(reduced_tokens.data(), reduced_tokens.size());
+                    ret = llama_decode(llama_ctx, batch);
+                }
+                
+                if (ret != 0) {
+                    result_text = "Error: Context overflow.  Try a shorter message.";
+                    char* output = new char[result_text.length() + 1];
+                    std::strcpy(output, result_text. c_str());
+                    return output;
+                }
+            }
+            
+            // Семплер
+            llama_sampler_chain_params sampler_params = llama_sampler_chain_default_params();
+            llama_sampler* sampler = llama_sampler_chain_init(sampler_params);
+            
+            llama_sampler_chain_add(sampler, llama_sampler_init_temp(params->temperature));
+            llama_sampler_chain_add(sampler, llama_sampler_init_top_k((int)params->topK));
+            llama_sampler_chain_add(sampler, llama_sampler_init_top_p(params->topP, 1));
+            llama_sampler_chain_add(sampler, llama_sampler_init_penalties(
+                64, params->repeatPenalty, params->frequencyPenalty, params->presencePenalty
+            ));
+            llama_sampler_chain_add(sampler, llama_sampler_init_dist(params->seed));
+            
+            std::vector<llama_token> generated_tokens;
+            
+            LOGI("Starting generation...");
+            
+            for (int i = 0; i < max_gen_tokens; i++) {
+                llama_token next_token = llama_sampler_sample(sampler, llama_ctx, -1);
+                
+                if (llama_vocab_is_eog(vocab, next_token)) {
+                    LOGI("End of generation at step %d", i);
+                    break;
+                }
+                
+                generated_tokens.push_back(next_token);
+                llama_sampler_accept(sampler, next_token);
+                
+                // Перевіряємо стоп-послідовності кожні 10 токенів
+                if ((i + 1) % 10 == 0 && ! generated_tokens.empty()) {
+                    std::vector<char> temp_buffer(generated_tokens. size() * 10);
+                    int temp_len = llama_detokenize(vocab, generated_tokens. data(), 
+                                                    generated_tokens.size(),
+                                                    temp_buffer.data(), 
+                                                    temp_buffer.size(), true, false);
+                    if (temp_len > 0) {
+                        std::string temp_text(temp_buffer. data(), temp_len);
+                        if (check_stop_sequence(temp_text)) {
+                            LOGI("Stop sequence detected at step %d", i);
+                            break;
                         }
-                    }
-                    
-                    llama_batch next_batch = llama_batch_get_one(&next_token, 1);
-                    ret = llama_decode(llama_ctx, next_batch);
-                    if (ret != 0) {
-                        LOGE("Failed to decode generated token at step %d", i);
-                        break;
                     }
                 }
                 
-                // Конвертуємо токени в текст
-                if (!generated_tokens.empty()) {
-                    std::vector<char> text_buffer(generated_tokens.size() * 10);
-                    int text_len = llama_detokenize(vocab, generated_tokens.data(), generated_tokens. size(),
-                                                   text_buffer.data(), text_buffer.size(), true, false);
-                    
-                    if (text_len > 0) {
-                        result_text = std::string(text_buffer.data(), text_len);
-                        result_text = remove_stop_sequence(result_text);
-                    } else {
-                        result_text = "Error: Failed to convert tokens to text.";
-                    }
+                llama_batch next_batch = llama_batch_get_one(&next_token, 1);
+                ret = llama_decode(llama_ctx, next_batch);
+                if (ret != 0) {
+                    LOGE("Decode error at step %d", i);
+                    break;
+                }
+            }
+            
+            // Конвертуємо в текст
+            if (! generated_tokens.empty()) {
+                std::vector<char> text_buffer(generated_tokens.size() * 10);
+                int text_len = llama_detokenize(vocab, generated_tokens.data(), 
+                                                generated_tokens.size(),
+                                                text_buffer.data(), 
+                                                text_buffer.size(), true, false);
+                
+                if (text_len > 0) {
+                    result_text = std::string(text_buffer.data(), text_len);
+                    result_text = remove_stop_sequence(result_text);
                 } else {
                     result_text = "";
                 }
-                
-                llama_sampler_free(sampler);
-                
-                LOGI("Generated %zu tokens", generated_tokens.size());
             }
+            
+            llama_sampler_free(sampler);
+            LOGI("Generated %zu tokens", generated_tokens.size());
             
         } catch (const std::exception& e) {
             LOGE("Exception during generation: %s", e.what());
-            result_text = "Error: Exception during text generation.";
+            result_text = "Error: Generation failed. ";
         }
         
-        // Копіювання результату
-        char* output = new char[result_text.length() + 1];
-        std::strcpy(output, result_text. c_str());
-        
-        LOGI("Generated text length: %zu", result_text. length());
+        char* output = new char[result_text. length() + 1];
+        std::strcpy(output, result_text.c_str());
         return output;
         
     } catch (const std::exception& e) {
@@ -351,17 +355,13 @@ void llama_dart_free_model(int32_t model_id) {
 
 void llama_dart_free_tokens(llama_dart_tokens* tokens) {
     if (tokens) {
-        if (tokens->tokens) {
-            delete[] tokens->tokens;
-        }
+        delete[] tokens->tokens;
         delete tokens;
     }
 }
 
 void llama_dart_free_string(char* str) {
-    if (str) {
-        delete[] str;
-    }
+    delete[] str;
 }
 
 } // extern "C"
