@@ -116,7 +116,7 @@ class LlmService extends ChangeNotifier {
       
       if (_currentContext == null || _currentContext == nullptr) {
         debugPrint('Failed to create context');
-        _bindings! .freeModel(_currentModelId!);
+        _bindings!.freeModel(_currentModelId!);
         _currentModelId = null;
         return false;
       }
@@ -160,9 +160,11 @@ class LlmService extends ChangeNotifier {
       
       final inputTokens = tokens.ref.nTokens;
       _usedTokens = inputTokens + maxTokens;
-      notifyListeners();
       
-      debugPrint('Input tokens: $inputTokens, context usage: $_usedTokens/$_contextLength');
+      // Оновлюємо UI в наступному кадрі
+      Future.microtask(() => notifyListeners());
+      
+      debugPrint('Input tokens: $inputTokens, usage: $_usedTokens/$_contextLength');
       
       final result = _bindings!.generate(
         _currentContext!,
@@ -193,12 +195,12 @@ class LlmService extends ChangeNotifier {
     final controller = StreamController<String>();
     _generationControllers[streamId] = controller;
     
-    _generateStream(prompt, maxTokens, controller, streamId);
+    _generateStreamAsync(prompt, maxTokens, controller, streamId);
     
-    return controller.stream;
+    return controller. stream;
   }
   
-  Future<void> _generateStream(
+  Future<void> _generateStreamAsync(
     String prompt,
     int maxTokens,
     StreamController<String> controller,
@@ -215,6 +217,7 @@ class LlmService extends ChangeNotifier {
     _shouldStop = false;
     
     try {
+      // Генеруємо повну відповідь
       String result = await generateResponse(prompt, maxTokens: maxTokens);
       
       if (_shouldStop || controller.isClosed) {
@@ -222,15 +225,18 @@ class LlmService extends ChangeNotifier {
         return;
       }
       
+      // Стрімимо по частинах з throttling
       String accumulated = '';
-      const int chunkSize = 5;
+      const int chunkSize = 3;
+      int updateCounter = 0;
       
-      for (int i = 0; i < result.length; i += chunkSize) {
+      for (int i = 0; i < result. length; i += chunkSize) {
         if (controller.isClosed || _shouldStop) break;
         
         final end = (i + chunkSize < result.length) ?  i + chunkSize : result.length;
         accumulated += result.substring(i, end);
         
+        // Перевірка на стоп-послідовності
         bool shouldStop = false;
         for (final stop in _stopSequences) {
           if (accumulated.endsWith(stop)) {
@@ -240,17 +246,27 @@ class LlmService extends ChangeNotifier {
           }
         }
         
-        controller.add(accumulated);
+        // Оновлюємо UI кожні 5 чанків щоб не перевантажувати
+        updateCounter++;
+        if (updateCounter % 5 == 0 || shouldStop || i + chunkSize >= result.length) {
+          controller.add(accumulated);
+          await Future.delayed(const Duration(milliseconds: 16)); // 1 кадр
+        }
         
         if (shouldStop) break;
-        
-        await Future.delayed(const Duration(milliseconds: 8));
+      }
+      
+      // Фінальне оновлення
+      if (! controller.isClosed) {
+        controller. add(accumulated);
       }
       
       await controller.close();
     } catch (e) {
-      controller. addError('Error: $e');
-      await controller.close();
+      if (!controller.isClosed) {
+        controller.addError('Error: $e');
+        await controller.close();
+      }
     } finally {
       _isGenerating = false;
       _generationControllers.remove(streamId);
@@ -320,7 +336,7 @@ class LlmService extends ChangeNotifier {
       final modelsDir = await _getModelsDirectory();
       final modelFile = File('${modelsDir.path}/$modelId.bin');
       
-      if (!await modelFile. exists()) return false;
+      if (!await modelFile.exists()) return false;
       
       final output = AccumulatorSink<Digest>();
       final input = sha256.startChunkedConversion(output);
