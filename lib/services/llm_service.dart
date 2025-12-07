@@ -33,7 +33,7 @@ class LlmService extends ChangeNotifier {
   LlmService._internal();
   
   bool get isGenerating => _isGenerating;
-  bool get isModelLoaded => _currentModelId != null && _currentContext != null;
+  bool get isModelLoaded => _currentModelId != null && _currentContext != null && _currentContext != nullptr;
   bool get isInitialized => _isInitialized;
   int get contextLength => _contextLength;
   int get usedTokens => _usedTokens;
@@ -51,6 +51,7 @@ class LlmService extends ChangeNotifier {
     } catch (e) {
       debugPrint('Error initializing LlmService: $e');
       _isInitialized = false;
+      rethrow;
     }
   }
   
@@ -61,12 +62,31 @@ class LlmService extends ChangeNotifier {
   
   void clearContext() {
     _usedTokens = 0;
-    notifyListeners();
+    _safeNotifyListeners();
     debugPrint('Context cleared');
   }
   
+  /// Безпечний notifyListeners
+  void _safeNotifyListeners() {
+    try {
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Error in notifyListeners: $e');
+    }
+  }
+  
   Future<bool> loadModel(LlmModel model) async {
-    debugPrint('Loading model: ${model.id}');
+    debugPrint('=== LOAD MODEL START: ${model.id} ===');
+    
+    // Чекаємо якщо генерація в процесі
+    if (_isGenerating) {
+      debugPrint('Generation in progress, waiting.. .');
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (_isGenerating) {
+        debugPrint('Still generating, cannot load model');
+        return false;
+      }
+    }
     
     if (!_isInitialized || _bindings == null) {
       await init();
@@ -101,14 +121,14 @@ class LlmService extends ChangeNotifier {
       );
       
       if (_currentModelId == null || _currentModelId!  <= 0) {
-        debugPrint('Failed to load model');
+        debugPrint('Failed to load model - invalid ID');
         _currentModelId = null;
         return false;
       }
       
       debugPrint('Model loaded, ID: $_currentModelId');
       
-      _currentContext = _bindings!.createContext(
+      _currentContext = _bindings!. createContext(
         _currentModelId!,
         contextLength: _contextLength,
         batchSize: 256,
@@ -121,8 +141,8 @@ class LlmService extends ChangeNotifier {
         return false;
       }
       
-      notifyListeners();
-      debugPrint('Model ready: ${model.name}, context: $_contextLength');
+      _safeNotifyListeners();
+      debugPrint('=== LOAD MODEL SUCCESS: ${model.name} ===');
       return true;
       
     } catch (e) {
@@ -133,38 +153,104 @@ class LlmService extends ChangeNotifier {
   }
   
   void _cleanup() {
-    if (_currentContext != null && _bindings != null) {
+    debugPrint('=== CLEANUP START ===');
+    
+    // Спочатку зупиняємо всі активні генерації
+    _shouldStop = true;
+    _isGenerating = false;
+    
+    // Закриваємо всі контролери
+    for (final entry in _generationControllers.entries) {
+      try {
+        if (! entry.value.isClosed) {
+          entry.value. close();
+        }
+      } catch (e) {
+        debugPrint('Error closing controller ${entry.key}: $e');
+      }
+    }
+    _generationControllers.clear();
+    
+    // Звільняємо контекст
+    if (_currentContext != null && _currentContext != nullptr && _bindings != null) {
       try {
         _bindings!.freeContext(_currentContext! );
-      } catch (_) {}
+        debugPrint('Context freed');
+      } catch (e) {
+        debugPrint('Error freeing context: $e');
+      }
       _currentContext = null;
     }
+    
+    // Звільняємо модель
     if (_currentModelId != null && _bindings != null) {
       try {
         _bindings!.freeModel(_currentModelId!);
-      } catch (_) {}
+        debugPrint('Model freed');
+      } catch (e) {
+        debugPrint('Error freeing model: $e');
+      }
       _currentModelId = null;
     }
+    
+    debugPrint('=== CLEANUP END ===');
   }
   
   Future<String> generateResponse(String prompt, {int maxTokens = 256}) async {
-    if (!isModelLoaded || _bindings == null) {
+    debugPrint('=== GENERATE RESPONSE START ===');
+    
+    // Перевірка стану
+    if (!isModelLoaded) {
+      debugPrint('ERROR: Model not loaded');
       throw Exception('Model not loaded');
+    }
+    
+    if (_bindings == null) {
+      debugPrint('ERROR: Bindings is null');
+      throw Exception('Bindings not initialized');
+    }
+    
+    // Захист від паралельних викликів
+    if (_isGenerating) {
+      debugPrint('WARNING: Already generating, waiting...');
+      // Чекаємо до 5 секунд
+      for (int i = 0; i < 50 && _isGenerating; i++) {
+        await Future.delayed(const Duration(milliseconds: 100));
+      }
+      if (_isGenerating) {
+        debugPrint('ERROR: Timeout waiting for previous generation');
+        return 'Error: Generation already in progress';
+      }
     }
     
     _isGenerating = true;
     _shouldStop = false;
     
+    Pointer<LlamaDartTokens>? tokens;
+    
     try {
-      final tokens = _bindings!.tokenize(_currentContext!, prompt);
+      debugPrint('Tokenizing prompt (length: ${prompt.length}).. .');
+      tokens = _bindings!. tokenize(_currentContext!, prompt);
       
-      final inputTokens = tokens.ref.nTokens;
+      if (tokens == nullptr) {
+        debugPrint('ERROR: Tokenization returned nullptr');
+        return 'Error: Tokenization failed';
+      }
+      
+      final inputTokens = tokens.ref. nTokens;
+      debugPrint('Input tokens: $inputTokens');
+      
+      if (inputTokens <= 0) {
+        debugPrint('ERROR: Invalid token count: $inputTokens');
+        return 'Error: Invalid input';
+      }
+      
       _usedTokens = inputTokens + maxTokens;
       
       // Оновлюємо UI в наступному кадрі
-      Future.microtask(() => notifyListeners());
+      Future.microtask(() => _safeNotifyListeners());
       
-      debugPrint('Input tokens: $inputTokens, usage: $_usedTokens/$_contextLength');
+      debugPrint('Starting generation (maxTokens: $maxTokens).. .');
       
       final result = _bindings!.generate(
         _currentContext!,
@@ -179,22 +265,45 @@ class LlmService extends ChangeNotifier {
         presencePenalty: 0.1,
       );
       
-      _bindings!.freeTokenizedText(tokens);
+      debugPrint('Generation completed, result length: ${result.length}');
       
       return _cleanResponse(result);
-    } catch (e) {
-      debugPrint('Error generating response: $e');
+      
+    } catch (e, stackTrace) {
+      debugPrint('ERROR in generateResponse: $e');
+      debugPrint('Stack trace: $stackTrace');
       return 'Error: $e';
     } finally {
+      // Завжди звільняємо токени
+      if (tokens != null && tokens != nullptr) {
+        try {
+          _bindings!.freeTokenizedText(tokens);
+          debugPrint('Tokens freed');
+        } catch (e) {
+          debugPrint('Error freeing tokens: $e');
+        }
+      }
+      
       _isGenerating = false;
+      debugPrint('=== GENERATE RESPONSE END ===');
     }
   }
   
   Stream<String> generateResponseStream(String prompt, {int maxTokens = 256}) {
     final streamId = DateTime.now().millisecondsSinceEpoch.toString();
-    final controller = StreamController<String>();
+    debugPrint('=== STREAM START: $streamId ===');
+    
+    // Використовуємо broadcast контролер для безпеки
+    final controller = StreamController<String>.broadcast(
+      onCancel: () {
+        debugPrint('Stream $streamId cancelled');
+        _generationControllers.remove(streamId);
+      },
+    );
+    
     _generationControllers[streamId] = controller;
     
+    // Запускаємо генерацію асинхронно
     _generateStreamAsync(prompt, maxTokens, controller, streamId);
     
     return controller. stream;
@@ -206,32 +315,53 @@ class LlmService extends ChangeNotifier {
     StreamController<String> controller,
     String streamId,
   ) async {
-    if (!isModelLoaded) {
-      controller.addError('Model not loaded');
-      await controller.close();
+    if (! isModelLoaded) {
+      debugPrint('ERROR: Model not loaded for stream $streamId');
+      if (! controller.isClosed) {
+        controller. addError('Model not loaded');
+        await controller.close();
+      }
       _generationControllers. remove(streamId);
       return;
     }
     
-    _isGenerating = true;
-    _shouldStop = false;
-    
     try {
       // Генеруємо повну відповідь
+      debugPrint('Generating response for stream $streamId...');
       String result = await generateResponse(prompt, maxTokens: maxTokens);
       
+      // Перевіряємо чи не було скасовано
       if (_shouldStop || controller.isClosed) {
-        await controller.close();
+        debugPrint('Stream $streamId was stopped/closed');
+        if (!controller.isClosed) {
+          await controller.close();
+        }
+        _generationControllers. remove(streamId);
         return;
       }
       
-      // Стрімимо по частинах з throttling
+      // Перевіряємо на помилку
+      if (result.startsWith('Error:')) {
+        debugPrint('Generation returned error: $result');
+        if (!controller.isClosed) {
+          controller.addError(result);
+          await controller.close();
+        }
+        _generationControllers. remove(streamId);
+        return;
+      }
+      
+      // Стрімимо по частинах
       String accumulated = '';
       const int chunkSize = 3;
       int updateCounter = 0;
       
       for (int i = 0; i < result. length; i += chunkSize) {
-        if (controller.isClosed || _shouldStop) break;
+        // Перевіряємо на кожній ітерації
+        if (controller.isClosed || _shouldStop) {
+          debugPrint('Stream $streamId stopped at char $i');
+          break;
+        }
         
         final end = (i + chunkSize < result.length) ?  i + chunkSize : result.length;
         accumulated += result.substring(i, end);
@@ -246,44 +376,80 @@ class LlmService extends ChangeNotifier {
           }
         }
         
-        // Оновлюємо UI кожні 5 чанків щоб не перевантажувати
         updateCounter++;
         if (updateCounter % 5 == 0 || shouldStop || i + chunkSize >= result.length) {
-          controller.add(accumulated);
-          await Future.delayed(const Duration(milliseconds: 16)); // 1 кадр
+          if (!controller.isClosed) {
+            controller.add(accumulated);
+          }
+          // Даємо UI час на оновлення
+          await Future.delayed(const Duration(milliseconds: 16));
         }
         
         if (shouldStop) break;
       }
       
       // Фінальне оновлення
-      if (! controller.isClosed) {
-        controller. add(accumulated);
+      if (!controller.isClosed) {
+        controller.add(accumulated);
+        await controller.close();
       }
       
-      await controller.close();
-    } catch (e) {
-      if (!controller.isClosed) {
+      debugPrint('=== STREAM $streamId COMPLETE ===');
+      
+    } catch (e, stackTrace) {
+      debugPrint('ERROR in stream $streamId: $e');
+      debugPrint('Stack: $stackTrace');
+      
+      if (!controller. isClosed) {
         controller.addError('Error: $e');
         await controller.close();
       }
     } finally {
-      _isGenerating = false;
       _generationControllers.remove(streamId);
     }
   }
   
   void stopGeneration(String streamId) {
+    debugPrint('=== STOP GENERATION: $streamId ===');
+    
     _shouldStop = true;
+    
     final controller = _generationControllers[streamId];
-    if (controller != null && !controller.isClosed) {
-      controller.close();
+    if (controller != null) {
+      if (!controller.isClosed) {
+        try {
+          controller. close();
+        } catch (e) {
+          debugPrint('Error closing controller: $e');
+        }
+      }
       _generationControllers.remove(streamId);
     }
+    
     _isGenerating = false;
   }
   
+  /// Зупиняє всі активні генерації
+  void stopAllGenerations() {
+    debugPrint('=== STOP ALL GENERATIONS ===');
+    _shouldStop = true;
+    _isGenerating = false;
+    
+    for (final entry in Map.from(_generationControllers). entries) {
+      try {
+        if (!entry.value. isClosed) {
+          entry.value.close();
+        }
+      } catch (e) {
+        debugPrint('Error closing controller ${entry.key}: $e');
+      }
+    }
+    _generationControllers.clear();
+  }
+  
   String _cleanResponse(String response) {
+    if (response.isEmpty) return '';
+    
     String cleaned = response;
     
     for (final stop in _stopSequences) {
@@ -300,11 +466,11 @@ class LlmService extends ChangeNotifier {
   }
   
   void unloadCurrentModel() {
-    debugPrint('Unloading model...');
+    debugPrint('=== UNLOAD MODEL ===');
+    stopAllGenerations();
     _cleanup();
     _usedTokens = 0;
-    notifyListeners();
-    debugPrint('Model unloaded');
+    _safeNotifyListeners();
   }
   
   Future<Directory> _getModelsDirectory() async {
@@ -353,6 +519,14 @@ class LlmService extends ChangeNotifier {
       debugPrint('Verify error: $e');
       return false;
     }
+  }
+  
+  @override
+  void dispose() {
+    debugPrint('=== LlmService DISPOSE ===');
+    stopAllGenerations();
+    _cleanup();
+    super.dispose();
   }
 }
 

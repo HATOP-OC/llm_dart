@@ -9,6 +9,7 @@ class LlamaBindings {
   factory LlamaBindings() => _instance;
   
   late DynamicLibrary _lib;
+  bool _isInitialized = false;
   
   // FFI функції
   late final int Function(Pointer<Utf8>, Pointer<LlamaDartModelParams>) _loadModelFn;
@@ -21,11 +22,22 @@ class LlamaBindings {
   late final void Function(Pointer<Utf8>) _freeStringFn;
   
   LlamaBindings._internal() {
-    _lib = _loadLibrary();
-    _initBindings();
+    try {
+      _lib = _loadLibrary();
+      _initBindings();
+      _isInitialized = true;
+      debugPrint('LlamaBindings initialized successfully');
+    } catch (e) {
+      debugPrint('ERROR initializing LlamaBindings: $e');
+      _isInitialized = false;
+      rethrow;
+    }
   }
   
+  bool get isInitialized => _isInitialized;
+  
   DynamicLibrary _loadLibrary() {
+    debugPrint('Loading native library...');
     if (Platform.isAndroid) {
       return DynamicLibrary. open('libllama_bindings.so');
     } else if (Platform.isIOS) {
@@ -41,12 +53,14 @@ class LlamaBindings {
   }
   
   void _initBindings() {
+    debugPrint('Initializing FFI bindings...');
+    
     _loadModelFn = _lib.lookupFunction<
       Int32 Function(Pointer<Utf8>, Pointer<LlamaDartModelParams>),
       int Function(Pointer<Utf8>, Pointer<LlamaDartModelParams>)
     >('llama_dart_load_model');
     
-    _createContextFn = _lib. lookupFunction<
+    _createContextFn = _lib.lookupFunction<
       Pointer<LlamaDartContext> Function(Int32, Pointer<LlamaDartContextParams>),
       Pointer<LlamaDartContext> Function(int, Pointer<LlamaDartContextParams>)
     >('llama_dart_create_context');
@@ -80,97 +94,147 @@ class LlamaBindings {
       Void Function(Pointer<Utf8>),
       void Function(Pointer<Utf8>)
     >('llama_dart_free_string');
+    
+    debugPrint('FFI bindings initialized');
   }
   
-  /// Визначає оптимальну кількість потоків (~50% CPU)
+  void _ensureInitialized() {
+    if (! _isInitialized) {
+      throw StateError('LlamaBindings not initialized');
+    }
+  }
+  
+  /// Визначає оптимальну кількість потоків
   int getOptimalThreadCount() {
     final cpuCores = Platform.numberOfProcessors;
     
     int optimal;
     if (cpuCores >= 8) {
-      optimal = 3;  // Флагман: 3 з 8 ядер (~37%)
+      optimal = 3;
     } else if (cpuCores >= 6) {
-      optimal = 2;  // Середній: 2 з 6 ядер (~33%)
+      optimal = 2;
     } else if (cpuCores >= 4) {
-      optimal = 2;  // Бюджет: 2 з 4 ядер (50%)
+      optimal = 2;
     } else {
-      optimal = 1;  // Старий: 1 ядро
+      optimal = 1;
     }
     
-    debugPrint('CPU cores: $cpuCores, optimal threads: $optimal (~${(optimal * 100 / cpuCores).round()}% CPU)');
-    
+    debugPrint('CPU cores: $cpuCores, optimal threads: $optimal');
     return optimal;
   }
   
-  /// Завантажує модель з MMAP (оптимізація RAM)
+  /// Завантажує модель
   int loadModel(String path, {
     int nGpuLayers = 0,
     int quantizationType = 4,
     int seed = 0,
     int nBatch = 256,
   }) {
-    final pathPtr = path.toNativeUtf8();
-    final params = calloc<LlamaDartModelParams>();
+    _ensureInitialized();
+    debugPrint('=== FFI: loadModel ===');
+    debugPrint('Path: $path');
     
-    params.ref.nGpuLayers = nGpuLayers;
-    params.ref.quantizationType = quantizationType;
-    params.ref. seed = seed;
-    params.ref. nBatch = nBatch;
-    
-    debugPrint('Loading model with MMAP enabled (RAM optimized)');
+    Pointer<Utf8>? pathPtr;
+    Pointer<LlamaDartModelParams>?  params;
     
     try {
+      pathPtr = path.toNativeUtf8();
+      params = calloc<LlamaDartModelParams>();
+      
+      params.ref.nGpuLayers = nGpuLayers;
+      params.ref.quantizationType = quantizationType;
+      params. ref.seed = seed;
+      params. ref.nBatch = nBatch;
+      
       final result = _loadModelFn(pathPtr, params);
-      if (result > 0) {
-        debugPrint('Model loaded successfully, ID: $result');
-      }
+      debugPrint('loadModel result: $result');
       return result;
+      
     } catch (e) {
+      debugPrint('ERROR in loadModel: $e');
       throw Exception('Error loading model: $e');
     } finally {
-      calloc.free(pathPtr);
-      calloc.free(params);
+      if (pathPtr != null) {
+        calloc.free(pathPtr);
+      }
+      if (params != null) {
+        calloc.free(params);
+      }
     }
   }
   
-  /// Створює контекст з оптимізованими параметрами
+  /// Створює контекст
   Pointer<LlamaDartContext> createContext(
     int modelId, {
     int contextLength = 1024,
     int batchSize = 256,
     int?  threads,
   }) {
+    _ensureInitialized();
+    debugPrint('=== FFI: createContext ===');
+    debugPrint('modelId: $modelId, contextLength: $contextLength');
+    
     final nThreads = threads ?? getOptimalThreadCount();
-    
-    final params = calloc<LlamaDartContextParams>();
-    params.ref. nCtx = contextLength;
-    params.ref.nBatch = batchSize;
-    params. ref.nThreads = nThreads;
-    
-    debugPrint('Creating context: n_ctx=$contextLength, n_batch=$batchSize, n_threads=$nThreads');
+    Pointer<LlamaDartContextParams>? params;
     
     try {
+      params = calloc<LlamaDartContextParams>();
+      params.ref.nCtx = contextLength;
+      params.ref.nBatch = batchSize;
+      params.ref.nThreads = nThreads;
+      
       final result = _createContextFn(modelId, params);
-      if (result != nullptr) {
-        debugPrint('Context created successfully');
+      
+      if (result == nullptr) {
+        debugPrint('ERROR: createContext returned nullptr');
+      } else {
+        debugPrint('createContext success, handle: ${result.ref.handle}');
       }
+      
       return result;
+      
     } catch (e) {
+      debugPrint('ERROR in createContext: $e');
       throw Exception('Error creating context: $e');
     } finally {
-      calloc.free(params);
+      if (params != null) {
+        calloc.free(params);
+      }
     }
   }
   
   /// Токенізує текст
   Pointer<LlamaDartTokens> tokenize(Pointer<LlamaDartContext> context, String text) {
-    final textPtr = text. toNativeUtf8();
+    _ensureInitialized();
+    debugPrint('=== FFI: tokenize ===');
+    debugPrint('Text length: ${text.length}');
+    
+    if (context == nullptr) {
+      debugPrint('ERROR: context is nullptr');
+      throw ArgumentError('Context is null');
+    }
+    
+    Pointer<Utf8>? textPtr;
+    
     try {
-      return _tokenizeFn(context, textPtr);
+      textPtr = text.toNativeUtf8();
+      final result = _tokenizeFn(context, textPtr);
+      
+      if (result == nullptr) {
+        debugPrint('ERROR: tokenize returned nullptr');
+        throw Exception('Tokenization failed');
+      }
+      
+      debugPrint('tokenize success, nTokens: ${result.ref.nTokens}');
+      return result;
+      
     } catch (e) {
+      debugPrint('ERROR in tokenize: $e');
       throw Exception('Error tokenizing: $e');
     } finally {
-      calloc.free(textPtr);
+      if (textPtr != null) {
+        calloc.free(textPtr);
+      }
     }
   }
   
@@ -188,59 +252,121 @@ class LlamaBindings {
     double frequencyPenalty = 0.0,
     double presencePenalty = 0.0,
   }) {
-    final params = calloc<LlamaDartInferenceParams>();
+    _ensureInitialized();
+    debugPrint('=== FFI: generate ===');
+    debugPrint('maxTokens: $maxTokens, temp: $temperature');
     
-    params.ref. maxTokens = maxTokens;
-    params.ref.contextLength = contextLength;
-    params.ref.temperature = temperature;
-    params.ref.topP = topP;
-    params.ref.topK = topK;
-    params.ref. repeatPenalty = repeatPenalty;
-    params.ref.seed = seed;
-    params.ref.frequencyPenalty = frequencyPenalty;
-    params.ref.presencePenalty = presencePenalty;
+    if (context == nullptr) {
+      debugPrint('ERROR: context is nullptr');
+      return 'Error: Context is null';
+    }
+    
+    if (tokens == nullptr) {
+      debugPrint('ERROR: tokens is nullptr');
+      return 'Error: Tokens is null';
+    }
+    
+    Pointer<LlamaDartInferenceParams>?  params;
     
     try {
+      params = calloc<LlamaDartInferenceParams>();
+      
+      params.ref. maxTokens = maxTokens;
+      params.ref.contextLength = contextLength;
+      params.ref.temperature = temperature;
+      params.ref.topP = topP;
+      params.ref.topK = topK;
+      params.ref.repeatPenalty = repeatPenalty;
+      params.ref.seed = seed;
+      params.ref.frequencyPenalty = frequencyPenalty;
+      params.ref.presencePenalty = presencePenalty;
+      
+      debugPrint('Calling _generateFn...');
       final resultPtr = _generateFn(context, tokens, params);
+      
       if (resultPtr == nullptr) {
+        debugPrint('ERROR: generate returned nullptr');
         return 'Error: Generation failed';
       }
-      final result = resultPtr.toDartString();
-      _freeStringFn(resultPtr);
+      
+      // Безпечне перетворення в Dart string
+      String result;
+      try {
+        result = resultPtr.toDartString();
+        debugPrint('generate success, result length: ${result.length}');
+      } catch (e) {
+        debugPrint('ERROR converting result to string: $e');
+        result = 'Error: Failed to decode result';
+      }
+      
+      // Звільняємо C++ string
+      try {
+        _freeStringFn(resultPtr);
+      } catch (e) {
+        debugPrint('ERROR freeing result string: $e');
+      }
+      
       return result;
+      
     } catch (e) {
-      throw Exception('Error generating: $e');
+      debugPrint('ERROR in generate: $e');
+      return 'Error: $e';
     } finally {
-      calloc.free(params);
+      if (params != null) {
+        calloc.free(params);
+      }
     }
   }
   
   /// Звільняє контекст
   void freeContext(Pointer<LlamaDartContext> context) {
+    if (! _isInitialized) return;
+    
+    debugPrint('=== FFI: freeContext ===');
+    
+    if (context == nullptr) {
+      debugPrint('WARNING: context is nullptr, skipping');
+      return;
+    }
+    
     try {
       _freeContextFn(context);
       debugPrint('Context freed');
     } catch (e) {
-      debugPrint('Error freeing context: $e');
+      debugPrint('ERROR freeing context: $e');
     }
   }
   
   /// Звільняє модель
   void freeModel(int modelId) {
+    if (!_isInitialized) return;
+    
+    debugPrint('=== FFI: freeModel $modelId ===');
+    
     try {
       _freeModelFn(modelId);
       debugPrint('Model $modelId freed');
     } catch (e) {
-      debugPrint('Error freeing model: $e');
+      debugPrint('ERROR freeing model: $e');
     }
   }
   
   /// Звільняє токени
   void freeTokenizedText(Pointer<LlamaDartTokens> tokens) {
+    if (!_isInitialized) return;
+    
+    debugPrint('=== FFI: freeTokens ===');
+    
+    if (tokens == nullptr) {
+      debugPrint('WARNING: tokens is nullptr, skipping');
+      return;
+    }
+    
     try {
       _freeTokensFn(tokens);
+      debugPrint('Tokens freed');
     } catch (e) {
-      debugPrint('Error freeing tokens: $e');
+      debugPrint('ERROR freeing tokens: $e');
     }
   }
 }

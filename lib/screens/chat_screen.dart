@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:animated_text_kit/animated_text_kit.dart';
@@ -20,41 +21,66 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _isGenerating = false;
   String?  _currentStreamId;
   String _currentGeneratedText = "";
+  StreamSubscription<String>? _streamSubscription;
   
   DateTime _lastUIUpdate = DateTime.now();
   static const _uiUpdateInterval = Duration(milliseconds: 50);
+  
+  // Прапорець для відстеження чи віджет ще живий
+  bool _isDisposed = false;
 
   @override
   void dispose() {
+    _isDisposed = true;
+    _cancelStreamSubscription();
     _textController.dispose();
     _scrollController.dispose();
-    _stopGeneration();
     super.dispose();
+  }
+  
+  void _cancelStreamSubscription() {
+    _streamSubscription?.cancel();
+    _streamSubscription = null;
+    _currentStreamId = null;
   }
 
   void _scrollToBottom() {
+    if (_isDisposed) return;
+    
     WidgetsBinding. instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
+      if (!_isDisposed && _scrollController.hasClients) {
         _scrollController.animateTo(
-          _scrollController.position. maxScrollExtent,
+          _scrollController.position.maxScrollExtent,
           duration: const Duration(milliseconds: 300),
-          curve: Curves. easeOut,
+          curve: Curves.easeOut,
         );
       }
     });
   }
+  
+  /// Безпечний setState що перевіряє mounted і _isDisposed
+  void _safeSetState(VoidCallback fn) {
+    if (! _isDisposed && mounted) {
+      setState(fn);
+    }
+  }
 
   void _stopGeneration() {
     if (_currentStreamId != null) {
-      final llmService = Provider.of<LlmService>(context, listen: false);
-      llmService. stopGeneration(_currentStreamId!);
-      _currentStreamId = null;
+      try {
+        final llmService = Provider.of<LlmService>(context, listen: false);
+        llmService. stopGeneration(_currentStreamId!);
+      } catch (e) {
+        debugPrint('Error stopping generation: $e');
+      }
     }
-    if (mounted) {
-      setState(() {
-        _isGenerating = false;
-      });
-    }
+    
+    _cancelStreamSubscription();
+    
+    // Використовуємо безпечний setState
+    _safeSetState(() {
+      _isGenerating = false;
+    });
   }
 
   Future<void> _sendMessage() async {
@@ -70,7 +96,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final currentChat = chatStorage.currentChat;
     if (currentChat == null) return;
 
-    setState(() {
+    _safeSetState(() {
       _isGenerating = true;
       _currentGeneratedText = "";
     });
@@ -84,7 +110,7 @@ class _ChatScreenState extends State<ChatScreen> {
         "Error: Please download and activate a model in the 'Models' section.",
         false,
       );
-      setState(() {
+      _safeSetState(() {
         _isGenerating = false;
       });
       _scrollToBottom();
@@ -96,8 +122,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
     try {
       _currentStreamId = DateTime.now().millisecondsSinceEpoch.toString();
+      final chatId = currentChat.id!;
 
-      final allMessages = chatStorage.getChatById(currentChat.id!)!.messages;
+      final allMessages = chatStorage.getChatById(chatId)!.messages;
       final historyMessages = allMessages.length > 2 
           ? allMessages. sublist(0, allMessages.length - 2) 
           : [];
@@ -114,10 +141,14 @@ class _ChatScreenState extends State<ChatScreen> {
         modelName,
       );
 
-      llmService
+      // Зберігаємо підписку щоб мати змогу її скасувати
+      _streamSubscription = llmService
           .generateResponseStream(fullPrompt)
           .listen(
             (generatedPiece) async {
+              // Перевіряємо чи віджет ще живий
+              if (_isDisposed) return;
+              
               final now = DateTime.now();
               if (now.difference(_lastUIUpdate) < _uiUpdateInterval) {
                 _currentGeneratedText = generatedPiece;
@@ -125,70 +156,92 @@ class _ChatScreenState extends State<ChatScreen> {
               }
               _lastUIUpdate = now;
               
-              if (mounted) {
-                setState(() {
-                  _currentGeneratedText = generatedPiece;
-                });
-              }
+              _safeSetState(() {
+                _currentGeneratedText = generatedPiece;
+              });
 
-              final chat = chatStorage.getChatById(currentChat.id! );
-              if (chat != null && chat.messages.isNotEmpty) {
-                final lastMessage = chat.messages.last;
-                await chatStorage.updateMessage(
-                  lastMessage.id!,
-                  generatedPiece,
-                );
+              try {
+                final chat = chatStorage.getChatById(chatId);
+                if (chat != null && chat.messages.isNotEmpty) {
+                  final lastMessage = chat.messages.last;
+                  await chatStorage.updateMessage(
+                    lastMessage.id!,
+                    generatedPiece,
+                  );
+                }
+              } catch (e) {
+                debugPrint('Error updating message: $e');
               }
 
               _scrollToBottom();
             },
             onDone: () {
-              if (mounted) {
-                setState(() {
-                  _isGenerating = false;
-                  _currentStreamId = null;
-                });
+              if (_isDisposed) return;
+              
+              _safeSetState(() {
+                _isGenerating = false;
+                _currentStreamId = null;
+              });
+              
+              try {
+                final chat = chatStorage.getChatById(chatId);
+                if (chat != null && chat.messages.isNotEmpty && _currentGeneratedText.isNotEmpty) {
+                  final lastMessage = chat.messages.last;
+                  chatStorage.updateMessage(lastMessage.id!, _currentGeneratedText);
+                }
+              } catch (e) {
+                debugPrint('Error in onDone: $e');
               }
               
-              final chat = chatStorage.getChatById(currentChat.id!);
-              if (chat != null && chat.messages.isNotEmpty && _currentGeneratedText.isNotEmpty) {
-                final lastMessage = chat.messages.last;
-                chatStorage.updateMessage(lastMessage.id!, _currentGeneratedText);
-              }
+              _streamSubscription = null;
             },
             onError: (error) async {
-              final chat = chatStorage. getChatById(currentChat.id!);
-              if (chat != null && chat. messages.isNotEmpty) {
-                final lastMessage = chat. messages.last;
-                await chatStorage. updateMessage(
-                  lastMessage.id!,
-                  "Error generating response: $error",
-                );
+              if (_isDisposed) return;
+              
+              try {
+                final chat = chatStorage.getChatById(chatId);
+                if (chat != null && chat.messages.isNotEmpty) {
+                  final lastMessage = chat.messages.last;
+                  await chatStorage.updateMessage(
+                    lastMessage.id!,
+                    "Error generating response: $error",
+                  );
+                }
+              } catch (e) {
+                debugPrint('Error in onError handler: $e');
               }
-              if (mounted) {
-                setState(() {
-                  _isGenerating = false;
-                  _currentStreamId = null;
-                });
-              }
+              
+              _safeSetState(() {
+                _isGenerating = false;
+                _currentStreamId = null;
+              });
+              
               _scrollToBottom();
+              _streamSubscription = null;
             },
+            cancelOnError: true,
           );
     } catch (e) {
-      final chat = chatStorage. getChatById(currentChat.id!);
-      if (chat != null && chat. messages.isNotEmpty) {
-        final lastMessage = chat. messages.last;
-        await chatStorage. updateMessage(
-          lastMessage.id! ,
-          "Error: ${e.toString()}",
-        );
+      debugPrint('Exception in _sendMessage: $e');
+      
+      try {
+        final chat = chatStorage.getChatById(currentChat.id!);
+        if (chat != null && chat. messages.isNotEmpty) {
+          final lastMessage = chat. messages.last;
+          await chatStorage. updateMessage(
+            lastMessage.id! ,
+            "Error: ${e.toString()}",
+          );
+        }
+      } catch (updateError) {
+        debugPrint('Error updating message on exception: $updateError');
       }
-      if (mounted) {
-        setState(() {
-          _isGenerating = false;
-          _currentStreamId = null;
-        });
-      }
+      
+      _safeSetState(() {
+        _isGenerating = false;
+        _currentStreamId = null;
+      });
+      
       _scrollToBottom();
     }
   }
@@ -197,7 +250,7 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     return Column(
       children: [
-        // Messages area — БЕЗ горизонтальної панелі чатів
+        // Messages area
         Expanded(
           child: Consumer<ChatStorage>(
             builder: (context, chatStorage, child) {
@@ -256,7 +309,7 @@ class _ChatScreenState extends State<ChatScreen> {
               return ListView.builder(
                 controller: _scrollController,
                 padding: const EdgeInsets.only(top: 16, bottom: 80),
-                itemCount: chat.messages. length,
+                itemCount: chat.messages.length,
                 itemBuilder: (context, index) {
                   final message = chat.messages[index];
 
@@ -280,7 +333,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             topLeft: Radius.circular(18),
                             topRight: Radius. circular(18),
                             bottomLeft: Radius.circular(4),
-                            bottomRight: Radius. circular(18),
+                            bottomRight: Radius.circular(18),
                           ),
                         ),
                         child: Column(
@@ -372,9 +425,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   child: IconButton(
                     icon: Icon(
                       _isGenerating ?  Icons.stop : Icons.send,
-                      color: Colors.white,
+                      color: Colors. white,
                     ),
-                    onPressed: _isGenerating ?  _stopGeneration : _sendMessage,
+                    onPressed: _isGenerating ? _stopGeneration : _sendMessage,
                   ),
                 ),
               ],
