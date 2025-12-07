@@ -13,15 +13,19 @@ class LlmService extends ChangeNotifier {
   static final LlmService _instance = LlmService._internal();
   factory LlmService() => _instance;
   
-  LlamaBindings? _bindings;
+  LlamaBindings?  _bindings;
   int?  _currentModelId;
   Pointer<LlamaDartContext>? _currentContext;
-  int _contextLength = 2048;
+  int _contextLength = 1024;
+  int _batchSize = 512;  // NEW: збільшений batch size
   int _usedTokens = 0;
   final Map<String, StreamController<String>> _generationControllers = {};
   bool _isGenerating = false;
   bool _shouldStop = false;
   bool _isInitialized = false;
+  
+  // NEW: для incremental KV-cache
+  bool _useIncrementalKvCache = false;
   
   static const List<String> _stopSequences = [
     'User:', '\nUser:', 'Human:', '\nHuman:',
@@ -45,9 +49,10 @@ class LlmService extends ChangeNotifier {
     try {
       _bindings = LlamaBindings();
       final prefs = await SharedPreferences.getInstance();
-      _contextLength = prefs. getInt('context_length') ?? 2048;
+      _contextLength = prefs. getInt('context_length') ?? 1024;
+      _batchSize = prefs.getInt('batch_size') ?? 512;
       _isInitialized = true;
-      debugPrint('LlmService initialized, context_length: $_contextLength');
+      debugPrint('LlmService initialized, context_length: $_contextLength, batch_size: $_batchSize');
     } catch (e) {
       debugPrint('Error initializing LlmService: $e');
       _isInitialized = false;
@@ -60,8 +65,21 @@ class LlmService extends ChangeNotifier {
     debugPrint('Context length set to: $length (requires model reload)');
   }
   
+  void setBatchSize(int size) {
+    _batchSize = size;
+    debugPrint('Batch size set to: $size (requires model reload)');
+  }
+  
+  void setIncrementalKvCache(bool enabled) {
+    _useIncrementalKvCache = enabled;
+    debugPrint('Incremental KV-cache: $enabled');
+  }
+  
   void clearContext() {
     _usedTokens = 0;
+    if (_bindings != null && _currentContext != null && _currentContext != nullptr) {
+      _bindings!.clearKvCache(_currentContext!);
+    }
     _safeNotifyListeners();
     debugPrint('Context cleared');
   }
@@ -80,7 +98,8 @@ class LlmService extends ChangeNotifier {
     
     // Чекаємо якщо генерація в процесі
     if (_isGenerating) {
-      debugPrint('Generation in progress, waiting.. .');
+      debugPrint('Generation in progress, cancelling.. .');
+      stopAllGenerations();
       await Future.delayed(const Duration(milliseconds: 500));
       if (_isGenerating) {
         debugPrint('Still generating, cannot load model');
@@ -90,17 +109,21 @@ class LlmService extends ChangeNotifier {
     
     if (!_isInitialized || _bindings == null) {
       await init();
-      if (! _isInitialized || _bindings == null) {
+      if (!_isInitialized || _bindings == null) {
         debugPrint('Failed to initialize LlmService');
         return false;
       }
     }
     
     final prefs = await SharedPreferences.getInstance();
-    _contextLength = prefs. getInt('context_length') ?? 2048;
+    _contextLength = prefs. getInt('context_length') ?? 1024;
+    _batchSize = prefs.getInt('batch_size') ??  512;
     
     _cleanup();
     _usedTokens = 0;
+    
+    // Очищаємо guard sets при завантаженні нової моделі
+    _bindings!.resetFreedGuards();
     
     final modelsDir = await _getModelsDirectory();
     final modelPath = '${modelsDir.path}/${model.id}.bin';
@@ -112,12 +135,12 @@ class LlmService extends ChangeNotifier {
     }
     
     try {
-      debugPrint('Loading with context_length: $_contextLength');
+      debugPrint('Loading with context_length: $_contextLength, batch_size: $_batchSize');
       
       _currentModelId = _bindings!.loadModel(
         modelPath,
         quantizationType: model.quantization == QuantizationType.bit4 ? 4 : 8,
-        nBatch: 256,
+        nBatch: _batchSize,
       );
       
       if (_currentModelId == null || _currentModelId!  <= 0) {
@@ -128,10 +151,10 @@ class LlmService extends ChangeNotifier {
       
       debugPrint('Model loaded, ID: $_currentModelId');
       
-      _currentContext = _bindings!. createContext(
+      _currentContext = _bindings!.createContext(
         _currentModelId!,
         contextLength: _contextLength,
-        batchSize: 256,
+        batchSize: _batchSize,
       );
       
       if (_currentContext == null || _currentContext == nullptr) {
@@ -155,7 +178,15 @@ class LlmService extends ChangeNotifier {
   void _cleanup() {
     debugPrint('=== CLEANUP START ===');
     
-    // Спочатку зупиняємо всі активні генерації
+    // Спочатку скасовуємо генерацію через C++
+    if (_bindings != null && _currentContext != null && _currentContext != nullptr) {
+      try {
+        _bindings!.cancelGeneration(_currentContext! );
+      } catch (e) {
+        debugPrint('Error cancelling generation: $e');
+      }
+    }
+    
     _shouldStop = true;
     _isGenerating = false;
     
@@ -163,13 +194,13 @@ class LlmService extends ChangeNotifier {
     for (final entry in _generationControllers.entries) {
       try {
         if (! entry.value.isClosed) {
-          entry.value. close();
+          entry.value.close();
         }
       } catch (e) {
         debugPrint('Error closing controller ${entry.key}: $e');
       }
     }
-    _generationControllers.clear();
+    _generationControllers. clear();
     
     // Звільняємо контекст
     if (_currentContext != null && _currentContext != nullptr && _bindings != null) {
@@ -196,7 +227,10 @@ class LlmService extends ChangeNotifier {
     debugPrint('=== CLEANUP END ===');
   }
   
-  Future<String> generateResponse(String prompt, {int maxTokens = 256}) async {
+  Future<String> generateResponse(String prompt, {
+    int maxTokens = 256,
+    int timeoutMs = 60000,  // NEW: 60 секунд timeout
+  }) async {
     debugPrint('=== GENERATE RESPONSE START ===');
     
     // Перевірка стану
@@ -210,12 +244,24 @@ class LlmService extends ChangeNotifier {
       throw Exception('Bindings not initialized');
     }
     
-    // Захист від паралельних викликів
-    if (_isGenerating) {
-      debugPrint('WARNING: Already generating, waiting...');
-      // Чекаємо до 5 секунд
-      for (int i = 0; i < 50 && _isGenerating; i++) {
+    // Перевіряємо чи генерація вже активна через C++
+    if (_bindings!.isGenerating(_currentContext!)) {
+      debugPrint('WARNING: C++ reports generation in progress');
+      // Чекаємо або скасовуємо
+      for (int i = 0; i < 30 && _bindings!.isGenerating(_currentContext! ); i++) {
         await Future.delayed(const Duration(milliseconds: 100));
+      }
+      if (_bindings!.isGenerating(_currentContext!)) {
+        debugPrint('ERROR: Timeout waiting for previous generation');
+        return 'Error: Generation already in progress';
+      }
+    }
+    
+    // Захист від паралельних викликів на Dart стороні
+    if (_isGenerating) {
+      debugPrint('WARNING: Dart reports already generating, waiting...');
+      for (int i = 0; i < 50 && _isGenerating; i++) {
+        await Future. delayed(const Duration(milliseconds: 100));
       }
       if (_isGenerating) {
         debugPrint('ERROR: Timeout waiting for previous generation');
@@ -229,8 +275,8 @@ class LlmService extends ChangeNotifier {
     Pointer<LlamaDartTokens>? tokens;
     
     try {
-      debugPrint('Tokenizing prompt (length: ${prompt.length}).. .');
-      tokens = _bindings!. tokenize(_currentContext!, prompt);
+      debugPrint('Tokenizing prompt (length: ${prompt.length})...');
+      tokens = _bindings!.tokenize(_currentContext!, prompt);
       
       if (tokens == nullptr) {
         debugPrint('ERROR: Tokenization returned nullptr');
@@ -245,12 +291,21 @@ class LlmService extends ChangeNotifier {
         return 'Error: Invalid input';
       }
       
+      // Перевіряємо чи вміщаємось в контекст
+      final kvPos = _bindings! .getKvCachePosition(_currentContext!);
+      final totalNeeded = kvPos + inputTokens + maxTokens;
+      
+      if (totalNeeded > _contextLength) {
+        debugPrint('WARNING: Context overflow predicted ($totalNeeded > $_contextLength), clearing KV-cache');
+        _bindings!.clearKvCache(_currentContext!);
+      }
+      
       _usedTokens = inputTokens + maxTokens;
       
       // Оновлюємо UI в наступному кадрі
       Future.microtask(() => _safeNotifyListeners());
       
-      debugPrint('Starting generation (maxTokens: $maxTokens).. .');
+      debugPrint('Starting generation (maxTokens: $maxTokens, timeout: ${timeoutMs}ms)...');
       
       final result = _bindings!.generate(
         _currentContext!,
@@ -263,9 +318,14 @@ class LlmService extends ChangeNotifier {
         repeatPenalty: 1.2,
         frequencyPenalty: 0.1,
         presencePenalty: 0.1,
+        timeoutMs: timeoutMs,
+        clearKvCache: ! _useIncrementalKvCache,
       );
       
       debugPrint('Generation completed, result length: ${result.length}');
+      
+      // Оновлюємо used tokens з реальної позиції
+      _usedTokens = _bindings!.getKvCachePosition(_currentContext!);
       
       return _cleanResponse(result);
       
@@ -274,11 +334,10 @@ class LlmService extends ChangeNotifier {
       debugPrint('Stack trace: $stackTrace');
       return 'Error: $e';
     } finally {
-      // Завжди звільняємо токени
+      // Завжди звільняємо токени (з guard проти double-free)
       if (tokens != null && tokens != nullptr) {
         try {
           _bindings!.freeTokenizedText(tokens);
-          debugPrint('Tokens freed');
         } catch (e) {
           debugPrint('Error freeing tokens: $e');
         }
@@ -289,7 +348,10 @@ class LlmService extends ChangeNotifier {
     }
   }
   
-  Stream<String> generateResponseStream(String prompt, {int maxTokens = 256}) {
+  Stream<String> generateResponseStream(String prompt, {
+    int maxTokens = 256,
+    int timeoutMs = 60000,
+  }) {
     final streamId = DateTime.now().millisecondsSinceEpoch.toString();
     debugPrint('=== STREAM START: $streamId ===');
     
@@ -304,7 +366,7 @@ class LlmService extends ChangeNotifier {
     _generationControllers[streamId] = controller;
     
     // Запускаємо генерацію асинхронно
-    _generateStreamAsync(prompt, maxTokens, controller, streamId);
+    _generateStreamAsync(prompt, maxTokens, timeoutMs, controller, streamId);
     
     return controller. stream;
   }
@@ -312,6 +374,7 @@ class LlmService extends ChangeNotifier {
   Future<void> _generateStreamAsync(
     String prompt,
     int maxTokens,
+    int timeoutMs,
     StreamController<String> controller,
     String streamId,
   ) async {
@@ -328,7 +391,11 @@ class LlmService extends ChangeNotifier {
     try {
       // Генеруємо повну відповідь
       debugPrint('Generating response for stream $streamId...');
-      String result = await generateResponse(prompt, maxTokens: maxTokens);
+      String result = await generateResponse(
+        prompt, 
+        maxTokens: maxTokens,
+        timeoutMs: timeoutMs,
+      );
       
       // Перевіряємо чи не було скасовано
       if (_shouldStop || controller.isClosed) {
@@ -344,7 +411,7 @@ class LlmService extends ChangeNotifier {
       if (result.startsWith('Error:')) {
         debugPrint('Generation returned error: $result');
         if (!controller.isClosed) {
-          controller.addError(result);
+          controller. addError(result);
           await controller.close();
         }
         _generationControllers. remove(streamId);
@@ -382,14 +449,14 @@ class LlmService extends ChangeNotifier {
             controller.add(accumulated);
           }
           // Даємо UI час на оновлення
-          await Future.delayed(const Duration(milliseconds: 16));
+          await Future. delayed(const Duration(milliseconds: 16));
         }
         
         if (shouldStop) break;
       }
       
       // Фінальне оновлення
-      if (!controller.isClosed) {
+      if (!controller. isClosed) {
         controller.add(accumulated);
         await controller.close();
       }
@@ -400,12 +467,12 @@ class LlmService extends ChangeNotifier {
       debugPrint('ERROR in stream $streamId: $e');
       debugPrint('Stack: $stackTrace');
       
-      if (!controller. isClosed) {
+      if (! controller.isClosed) {
         controller.addError('Error: $e');
         await controller.close();
       }
     } finally {
-      _generationControllers.remove(streamId);
+      _generationControllers. remove(streamId);
     }
   }
   
@@ -413,6 +480,11 @@ class LlmService extends ChangeNotifier {
     debugPrint('=== STOP GENERATION: $streamId ===');
     
     _shouldStop = true;
+    
+    // Скасовуємо через C++
+    if (_bindings != null && _currentContext != null && _currentContext != nullptr) {
+      _bindings!.cancelGeneration(_currentContext!);
+    }
     
     final controller = _generationControllers[streamId];
     if (controller != null) {
@@ -435,10 +507,15 @@ class LlmService extends ChangeNotifier {
     _shouldStop = true;
     _isGenerating = false;
     
+    // Скасовуємо через C++
+    if (_bindings != null && _currentContext != null && _currentContext != nullptr) {
+      _bindings!.cancelGeneration(_currentContext!);
+    }
+    
     for (final entry in Map.from(_generationControllers). entries) {
       try {
-        if (!entry.value. isClosed) {
-          entry.value.close();
+        if (! entry.value.isClosed) {
+          entry.value. close();
         }
       } catch (e) {
         debugPrint('Error closing controller ${entry.key}: $e');
@@ -454,7 +531,7 @@ class LlmService extends ChangeNotifier {
     
     for (final stop in _stopSequences) {
       if (cleaned.contains(stop)) {
-        cleaned = cleaned.split(stop).first;
+        cleaned = cleaned. split(stop).first;
       }
     }
     
@@ -470,7 +547,16 @@ class LlmService extends ChangeNotifier {
     stopAllGenerations();
     _cleanup();
     _usedTokens = 0;
+    _bindings?. resetFreedGuards();
     _safeNotifyListeners();
+  }
+  
+  /// Отримує поточну позицію KV-cache
+  int getKvCachePosition() {
+    if (_bindings == null || _currentContext == null || _currentContext == nullptr) {
+      return 0;
+    }
+    return _bindings!.getKvCachePosition(_currentContext!);
   }
   
   Future<Directory> _getModelsDirectory() async {
@@ -489,7 +575,7 @@ class LlmService extends ChangeNotifier {
     await prefs.setString('checksum_$modelId', checksum);
   }
   
-  Future<String?> getStoredChecksum(String modelId) async {
+  Future<String? > getStoredChecksum(String modelId) async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString('checksum_$modelId');
   }
@@ -526,7 +612,7 @@ class LlmService extends ChangeNotifier {
     debugPrint('=== LlmService DISPOSE ===');
     stopAllGenerations();
     _cleanup();
-    super.dispose();
+    super. dispose();
   }
 }
 

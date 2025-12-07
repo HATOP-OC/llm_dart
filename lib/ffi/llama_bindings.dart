@@ -11,6 +11,10 @@ class LlamaBindings {
   late DynamicLibrary _lib;
   bool _isInitialized = false;
   
+  // ВИПРАВЛЕННЯ #4: Guard для запобігання double-free
+  final Set<int> _freedTokens = {};
+  final Set<int> _freedContexts = {};
+  
   // FFI функції
   late final int Function(Pointer<Utf8>, Pointer<LlamaDartModelParams>) _loadModelFn;
   late final Pointer<LlamaDartContext> Function(int, Pointer<LlamaDartContextParams>) _createContextFn;
@@ -20,6 +24,12 @@ class LlamaBindings {
   late final void Function(int) _freeModelFn;
   late final void Function(Pointer<LlamaDartTokens>) _freeTokensFn;
   late final void Function(Pointer<Utf8>) _freeStringFn;
+  
+  // NEW: Додаткові функції
+  late final void Function(Pointer<LlamaDartContext>) _cancelGenerationFn;
+  late final bool Function(Pointer<LlamaDartContext>) _isGeneratingFn;
+  late final void Function(Pointer<LlamaDartContext>) _clearKvCacheFn;
+  late final int Function(Pointer<LlamaDartContext>) _getKvCachePosFn;
   
   LlamaBindings._internal() {
     try {
@@ -65,7 +75,7 @@ class LlamaBindings {
       Pointer<LlamaDartContext> Function(int, Pointer<LlamaDartContextParams>)
     >('llama_dart_create_context');
     
-    _tokenizeFn = _lib. lookupFunction<
+    _tokenizeFn = _lib.lookupFunction<
       Pointer<LlamaDartTokens> Function(Pointer<LlamaDartContext>, Pointer<Utf8>),
       Pointer<LlamaDartTokens> Function(Pointer<LlamaDartContext>, Pointer<Utf8>)
     >('llama_dart_tokenize');
@@ -80,7 +90,7 @@ class LlamaBindings {
       void Function(Pointer<LlamaDartContext>)
     >('llama_dart_free_context');
     
-    _freeModelFn = _lib. lookupFunction<
+    _freeModelFn = _lib.lookupFunction<
       Void Function(Int32),
       void Function(int)
     >('llama_dart_free_model');
@@ -94,6 +104,27 @@ class LlamaBindings {
       Void Function(Pointer<Utf8>),
       void Function(Pointer<Utf8>)
     >('llama_dart_free_string');
+    
+    // NEW: Ініціалізація додаткових функцій
+    _cancelGenerationFn = _lib.lookupFunction<
+      Void Function(Pointer<LlamaDartContext>),
+      void Function(Pointer<LlamaDartContext>)
+    >('llama_dart_cancel_generation');
+    
+    _isGeneratingFn = _lib.lookupFunction<
+      Bool Function(Pointer<LlamaDartContext>),
+      bool Function(Pointer<LlamaDartContext>)
+    >('llama_dart_is_generating');
+    
+    _clearKvCacheFn = _lib.lookupFunction<
+      Void Function(Pointer<LlamaDartContext>),
+      void Function(Pointer<LlamaDartContext>)
+    >('llama_dart_clear_kv_cache');
+    
+    _getKvCachePosFn = _lib.lookupFunction<
+      Int32 Function(Pointer<LlamaDartContext>),
+      int Function(Pointer<LlamaDartContext>)
+    >('llama_dart_get_kv_cache_pos');
     
     debugPrint('FFI bindings initialized');
   }
@@ -110,9 +141,9 @@ class LlamaBindings {
     
     int optimal;
     if (cpuCores >= 8) {
-      optimal = 3;
+      optimal = 4;  // Збільшено для кращої продуктивності
     } else if (cpuCores >= 6) {
-      optimal = 2;
+      optimal = 3;
     } else if (cpuCores >= 4) {
       optimal = 2;
     } else {
@@ -128,7 +159,7 @@ class LlamaBindings {
     int nGpuLayers = 0,
     int quantizationType = 4,
     int seed = 0,
-    int nBatch = 256,
+    int nBatch = 512,  // ВИПРАВЛЕННЯ #5: збільшено з 256
   }) {
     _ensureInitialized();
     debugPrint('=== FFI: loadModel ===');
@@ -143,8 +174,8 @@ class LlamaBindings {
       
       params.ref.nGpuLayers = nGpuLayers;
       params.ref.quantizationType = quantizationType;
-      params. ref.seed = seed;
-      params. ref.nBatch = nBatch;
+      params.ref.seed = seed;
+      params.ref.nBatch = nBatch;
       
       final result = _loadModelFn(pathPtr, params);
       debugPrint('loadModel result: $result');
@@ -167,12 +198,12 @@ class LlamaBindings {
   Pointer<LlamaDartContext> createContext(
     int modelId, {
     int contextLength = 1024,
-    int batchSize = 256,
+    int batchSize = 512,  // ВИПРАВЛЕННЯ #5: збільшено з 256
     int?  threads,
   }) {
     _ensureInitialized();
     debugPrint('=== FFI: createContext ===');
-    debugPrint('modelId: $modelId, contextLength: $contextLength');
+    debugPrint('modelId: $modelId, contextLength: $contextLength, batchSize: $batchSize');
     
     final nThreads = threads ?? getOptimalThreadCount();
     Pointer<LlamaDartContextParams>? params;
@@ -238,7 +269,7 @@ class LlamaBindings {
     }
   }
   
-  /// Генерує текст
+  /// Генерує текст - ОНОВЛЕНО з timeout та clearKvCache
   String generate(
     Pointer<LlamaDartContext> context,
     Pointer<LlamaDartTokens> tokens, {
@@ -251,10 +282,12 @@ class LlamaBindings {
     int seed = 0,
     double frequencyPenalty = 0.0,
     double presencePenalty = 0.0,
+    int timeoutMs = 60000,  // NEW: 60 секунд default
+    bool clearKvCache = true,  // NEW: очищати KV-cache за замовчуванням
   }) {
     _ensureInitialized();
     debugPrint('=== FFI: generate ===');
-    debugPrint('maxTokens: $maxTokens, temp: $temperature');
+    debugPrint('maxTokens: $maxTokens, temp: $temperature, timeout: ${timeoutMs}ms');
     
     if (context == nullptr) {
       debugPrint('ERROR: context is nullptr');
@@ -280,6 +313,8 @@ class LlamaBindings {
       params.ref.seed = seed;
       params.ref.frequencyPenalty = frequencyPenalty;
       params.ref.presencePenalty = presencePenalty;
+      params.ref.timeoutMs = timeoutMs;
+      params.ref.clearKvCache = clearKvCache;
       
       debugPrint('Calling _generateFn...');
       final resultPtr = _generateFn(context, tokens, params);
@@ -318,9 +353,70 @@ class LlamaBindings {
     }
   }
   
-  /// Звільняє контекст
-  void freeContext(Pointer<LlamaDartContext> context) {
+  /// Скасовує генерацію
+  void cancelGeneration(Pointer<LlamaDartContext> context) {
+    if (!_isInitialized) return;
+    
+    debugPrint('=== FFI: cancelGeneration ===');
+    
+    if (context == nullptr) {
+      debugPrint('WARNING: context is nullptr, skipping');
+      return;
+    }
+    
+    try {
+      _cancelGenerationFn(context);
+      debugPrint('Generation cancelled');
+    } catch (e) {
+      debugPrint('ERROR cancelling generation: $e');
+    }
+  }
+  
+  /// Перевіряє чи генерація активна
+  bool isGenerating(Pointer<LlamaDartContext> context) {
+    if (! _isInitialized) return false;
+    
+    if (context == nullptr) return false;
+    
+    try {
+      return _isGeneratingFn(context);
+    } catch (e) {
+      debugPrint('ERROR checking generation status: $e');
+      return false;
+    }
+  }
+  
+  /// Очищає KV-cache
+  void clearKvCache(Pointer<LlamaDartContext> context) {
     if (! _isInitialized) return;
+    
+    if (context == nullptr) return;
+    
+    try {
+      _clearKvCacheFn(context);
+      debugPrint('KV-cache cleared');
+    } catch (e) {
+      debugPrint('ERROR clearing KV-cache: $e');
+    }
+  }
+  
+  /// Отримує позицію KV-cache
+  int getKvCachePosition(Pointer<LlamaDartContext> context) {
+    if (!_isInitialized) return 0;
+    
+    if (context == nullptr) return 0;
+    
+    try {
+      return _getKvCachePosFn(context);
+    } catch (e) {
+      debugPrint('ERROR getting KV-cache position: $e');
+      return 0;
+    }
+  }
+  
+  /// Звільняє контекст - з guard проти double-free
+  void freeContext(Pointer<LlamaDartContext> context) {
+    if (!_isInitialized) return;
     
     debugPrint('=== FFI: freeContext ===');
     
@@ -329,8 +425,17 @@ class LlamaBindings {
       return;
     }
     
+    final handle = context.ref. handle;
+    
+    // ВИПРАВЛЕННЯ #4: Guard проти double-free
+    if (_freedContexts.contains(handle)) {
+      debugPrint('WARNING: Context $handle already freed, skipping');
+      return;
+    }
+    
     try {
       _freeContextFn(context);
+      _freedContexts.add(handle);
       debugPrint('Context freed');
     } catch (e) {
       debugPrint('ERROR freeing context: $e');
@@ -351,7 +456,7 @@ class LlamaBindings {
     }
   }
   
-  /// Звільняє токени
+  /// Звільняє токени - з guard проти double-free
   void freeTokenizedText(Pointer<LlamaDartTokens> tokens) {
     if (!_isInitialized) return;
     
@@ -362,11 +467,27 @@ class LlamaBindings {
       return;
     }
     
+    final address = tokens.address;
+    
+    // ВИПРАВЛЕННЯ #4: Guard проти double-free
+    if (_freedTokens.contains(address)) {
+      debugPrint('WARNING: Tokens at $address already freed, skipping');
+      return;
+    }
+    
     try {
       _freeTokensFn(tokens);
+      _freedTokens.add(address);
       debugPrint('Tokens freed');
     } catch (e) {
       debugPrint('ERROR freeing tokens: $e');
     }
+  }
+  
+  /// Очищає guard sets при перезавантаженні моделі
+  void resetFreedGuards() {
+    _freedTokens.clear();
+    _freedContexts.clear();
+    debugPrint('Freed guards reset');
   }
 }

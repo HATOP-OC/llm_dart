@@ -2,6 +2,42 @@ cmake_minimum_required(VERSION 3.10.2)
 
 project(llama_bindings LANGUAGES C CXX)
 
+# Find Dart SDK
+execute_process(
+    COMMAND which flutter
+    OUTPUT_VARIABLE FLUTTER_EXECUTABLE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+if(FLUTTER_EXECUTABLE AND EXISTS "${FLUTTER_EXECUTABLE}")
+    get_filename_component(FLUTTER_BIN_DIR "${FLUTTER_EXECUTABLE}" DIRECTORY)
+    get_filename_component(FLUTTER_ROOT "${FLUTTER_BIN_DIR}/.." REALPATH)
+    set(DART_INCLUDE_DIR "${FLUTTER_ROOT}/bin/cache/dart-sdk/include")
+    message(STATUS "Found Dart SDK include directory via flutter executable: ${DART_INCLUDE_DIR}")
+else()
+    # Fallback for environments where `which flutter` might not work, e.g. some CI
+    # This assumes the flutter command is in the path.
+    execute_process(
+        COMMAND flutter --version --machine
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE FLUTTER_VERSION_INFO
+    )
+    if(FLUTTER_VERSION_INFO)
+        string(REGEX MATCH "\"flutterRoot\":\"([^\"]*)\"" _ "${FLUTTER_VERSION_INFO}")
+        if(CMAKE_MATCH_1)
+            set(FLUTTER_ROOT "${CMAKE_MATCH_1}")
+            # On Windows, the path might be escaped.
+            string(REPLACE "\\" "/" FLUTTER_ROOT "${FLUTTER_ROOT}")
+            set(DART_INCLUDE_DIR "${FLUTTER_ROOT}/bin/cache/dart-sdk/include")
+            message(STATUS "Found Dart SDK include directory via 'flutter --version': ${DART_INCLUDE_DIR}")
+        endif()
+    endif()
+endif()
+
+if(NOT DART_INCLUDE_DIR OR NOT EXISTS "${DART_INCLUDE_DIR}/dart_api.h")
+    message(FATAL_ERROR "Could not automatically find Dart SDK include directory. Please ensure 'flutter' is in your PATH.")
+endif()
+
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -87,8 +123,8 @@ foreach(f IN LISTS ALL_SOURCES)
     
     # Skip specific problematic files
     get_filename_component(fname "${f}" NAME)
-    if(fname MATCHES "ggml-vulkan\\." OR 
-       fname MATCHES "ggml-webgpu\\." OR 
+    if(fname MATCHES "ggml-vulkan\\." OR
+       fname MATCHES "ggml-webgpu\\." OR
        fname MATCHES "ggml-zdnn\\." OR
        fname MATCHES "ggml-opencl\\." OR
        fname MATCHES "ggml-cuda\\." OR
@@ -115,7 +151,7 @@ endif()
 set(GGML_VERSION_H "${LLAMA_DIR}/ggml/include/ggml-version.h")
 if(NOT EXISTS "${GGML_VERSION_H}")
     message(STATUS "Creating missing ggml-version.h")
-    file(WRITE "${GGML_VERSION_H}" 
+    file(WRITE "${GGML_VERSION_H}"
 "#ifndef GGML_VERSION_H
 #define GGML_VERSION_H
 
@@ -130,7 +166,7 @@ endif()
 set(GGML_VERSION_H_SRC "${LLAMA_DIR}/ggml/src/ggml-version.h")
 if(NOT EXISTS "${GGML_VERSION_H_SRC}")
     message(STATUS "Creating missing ggml-version.h in src directory")
-    file(WRITE "${GGML_VERSION_H_SRC}" 
+    file(WRITE "${GGML_VERSION_H_SRC}"
 "#ifndef GGML_VERSION_H
 #define GGML_VERSION_H
 
@@ -157,8 +193,8 @@ target_compile_definitions(llama PRIVATE
 )
 
 # Compiler flags
-target_compile_options(llama PRIVATE 
-    -fPIC 
+target_compile_options(llama PRIVATE
+    -fPIC
     -O3
     -fno-finite-math-only
     -Wall
@@ -182,18 +218,27 @@ elseif(ANDROID_ABI STREQUAL "x86")
     target_compile_definitions(llama PRIVATE GGML_USE_X86)
 endif()
 
+# Add dart_api_dl
+add_library(dart_api_dl STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/dart_api_dl.c
+)
+# Add Dart include directory
+target_include_directories(dart_api_dl PRIVATE ${DART_INCLUDE_DIR})
+
+
 # JNI/native bridge library
 add_library(llama_bindings SHARED
     llama_bindings.cpp
 )
 
 # Fix include paths for llama_bindings - use direct paths instead of relative
-target_include_directories(llama_bindings PRIVATE 
-    ${LLAMA_INCLUDES} 
+target_include_directories(llama_bindings PRIVATE
+    ${LLAMA_INCLUDES}
     ${CMAKE_CURRENT_SOURCE_DIR}
     "${LLAMA_DIR}/include"
     "${LLAMA_DIR}/src"
+    ${DART_INCLUDE_DIR}
 )
 
-target_link_libraries(llama_bindings PRIVATE llama log android)
+target_link_libraries(llama_bindings PRIVATE llama log android dart_api_dl)
 target_compile_options(llama_bindings PRIVATE -fPIC -O3)

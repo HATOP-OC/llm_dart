@@ -41,7 +41,7 @@ final class LlamaDartTokens extends Struct {
   external int nTokens;
 }
 
-/// Параметри інференсу
+/// Параметри інференсу - ОНОВЛЕНО
 final class LlamaDartInferenceParams extends Struct {
   @Int32()
   external int maxTokens;
@@ -69,4 +69,10 @@ final class LlamaDartInferenceParams extends Struct {
   
   @Float()
   external double presencePenalty;
+  
+  @Int32()
+  external int timeoutMs;  // NEW: timeout в мілісекундах
+  
+  @Bool()
+  external bool clearKvCache;  // NEW: чи очищати KV-cache
 }
