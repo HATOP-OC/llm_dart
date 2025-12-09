@@ -22,6 +22,15 @@ dependencies:
   path: ^1.9.0             # Керування шляхами
   flutter_markdown: ^0.7.3+1 # Відображення markdown
   animated_text_kit: ^4.2.2 # Анімація генерації тексту
+  flutter_launcher_icons: "^0.13.1"
+
+flutter_launcher_icons:
+  android: "ic_launcher"
+  ios: false
+  image_path: "assets/icon/app_icon.png"
+  min_sdk_android:
+  adaptive_icon_background: "#181829" 
+  adaptive_icon_foreground: "assets/icon/app_icon.png"
 
 dev_dependencies:
   flutter_test:
