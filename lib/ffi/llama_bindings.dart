@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
 import 'llama_types.dart';
+import 'dart:isolate';
 
 class LlamaBindings {
   static final LlamaBindings _instance = LlamaBindings._internal();
@@ -20,6 +21,12 @@ class LlamaBindings {
   late final Pointer<LlamaDartContext> Function(int, Pointer<LlamaDartContextParams>) _createContextFn;
   late final Pointer<LlamaDartTokens> Function(Pointer<LlamaDartContext>, Pointer<Utf8>) _tokenizeFn;
   late final Pointer<Utf8> Function(Pointer<LlamaDartContext>, Pointer<LlamaDartTokens>, Pointer<LlamaDartInferenceParams>) _generateFn;
+  late final void Function(
+    Pointer<LlamaDartContext>,
+    Pointer<LlamaDartTokens>,
+    Pointer<LlamaDartInferenceParams>,
+    int
+  ) _generateAsyncFn;
   late final void Function(Pointer<LlamaDartContext>) _freeContextFn;
   late final void Function(int) _freeModelFn;
   late final void Function(Pointer<LlamaDartTokens>) _freeTokensFn;
@@ -64,6 +71,15 @@ class LlamaBindings {
   
   void _initBindings() {
     debugPrint('Initializing FFI bindings...');
+
+    final initApi = _lib.lookupFunction<
+        IntPtr Function(Pointer<Void>),
+        int Function(Pointer<Void>)
+      >('InitDartApiDL');
+
+    if (initApi(NativeApi.initializeApiDLData) != 0) {
+      throw Exception('Failed to initialize Dart API');
+    }
     
     _loadModelFn = _lib.lookupFunction<
       Int32 Function(Pointer<Utf8>, Pointer<LlamaDartModelParams>),
@@ -84,6 +100,21 @@ class LlamaBindings {
       Pointer<Utf8> Function(Pointer<LlamaDartContext>, Pointer<LlamaDartTokens>, Pointer<LlamaDartInferenceParams>),
       Pointer<Utf8> Function(Pointer<LlamaDartContext>, Pointer<LlamaDartTokens>, Pointer<LlamaDartInferenceParams>)
     >('llama_dart_generate');
+
+    _generateAsyncFn = _lib.lookupFunction<
+      Void Function(
+        Pointer<LlamaDartContext>,
+        Pointer<LlamaDartTokens>,
+        Pointer<LlamaDartInferenceParams>,
+        Int64
+      ),
+      void Function(
+        Pointer<LlamaDartContext>,
+        Pointer<LlamaDartTokens>,
+        Pointer<LlamaDartInferenceParams>,
+        int
+      )
+    >('llama_dart_generate_async');
     
     _freeContextFn = _lib. lookupFunction<
       Void Function(Pointer<LlamaDartContext>),
@@ -346,6 +377,69 @@ class LlamaBindings {
     } catch (e) {
       debugPrint('ERROR in generate: $e');
       return 'Error: $e';
+    } finally {
+      if (params != null) {
+        calloc.free(params);
+      }
+    }
+  }
+
+  /// Generates text asynchronously
+  void generateAsync(
+    SendPort sendPort,
+    Pointer<LlamaDartContext> context,
+    Pointer<LlamaDartTokens> tokens, {
+    int maxTokens = 256,
+    int contextLength = 1024,
+    double temperature = 0.5,
+    double topP = 0.85,
+    double topK = 40,
+    double repeatPenalty = 1.2,
+    int seed = 0,
+    double frequencyPenalty = 0.0,
+    double presencePenalty = 0.0,
+    int timeoutMs = 60000,
+    bool clearKvCache = true,
+  }) {
+    _ensureInitialized();
+    debugPrint('=== FFI: generateAsync ===');
+
+    if (context == nullptr) {
+      throw ArgumentError('Context is null');
+    }
+
+    if (tokens == nullptr) {
+      throw ArgumentError('Tokens are null');
+    }
+
+    Pointer<LlamaDartInferenceParams>? params;
+
+    try {
+      params = calloc<LlamaDartInferenceParams>();
+
+      params.ref.maxTokens = maxTokens;
+      params.ref.contextLength = contextLength;
+      params.ref.temperature = temperature;
+      params.ref.topP = topP;
+      params.ref.topK = topK;
+      params.ref.repeatPenalty = repeatPenalty;
+      params.ref.seed = seed;
+      params.ref.frequencyPenalty = frequencyPenalty;
+      params.ref.presencePenalty = presencePenalty;
+      params.ref.timeoutMs = timeoutMs;
+      params.ref.clearKvCache = clearKvCache;
+
+      debugPrint('Calling _generateAsyncFn...');
+      _generateAsyncFn(
+        context,
+        tokens,
+        params,
+        sendPort.nativePort,
+      );
+
+    } catch (e) {
+      debugPrint('ERROR in generateAsync: $e');
+      throw Exception('Error starting async generation: $e');
     } finally {
       if (params != null) {
         calloc.free(params);
