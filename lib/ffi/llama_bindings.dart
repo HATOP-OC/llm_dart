@@ -1,9 +1,9 @@
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/foundation.dart';
 import 'llama_types.dart';
-import 'dart:isolate';
 
 class LlamaBindings {
   static final LlamaBindings _instance = LlamaBindings._internal();
@@ -12,7 +12,7 @@ class LlamaBindings {
   late DynamicLibrary _lib;
   bool _isInitialized = false;
   
-  // ВИПРАВЛЕННЯ #4: Guard для запобігання double-free
+  // Guard для запобігання double-free
   final Set<int> _freedTokens = {};
   final Set<int> _freedContexts = {};
   
@@ -21,22 +21,20 @@ class LlamaBindings {
   late final Pointer<LlamaDartContext> Function(int, Pointer<LlamaDartContextParams>) _createContextFn;
   late final Pointer<LlamaDartTokens> Function(Pointer<LlamaDartContext>, Pointer<Utf8>) _tokenizeFn;
   late final Pointer<Utf8> Function(Pointer<LlamaDartContext>, Pointer<LlamaDartTokens>, Pointer<LlamaDartInferenceParams>) _generateFn;
-  late final void Function(
-    Pointer<LlamaDartContext>,
-    Pointer<LlamaDartTokens>,
-    Pointer<LlamaDartInferenceParams>,
-    int
-  ) _generateAsyncFn;
   late final void Function(Pointer<LlamaDartContext>) _freeContextFn;
   late final void Function(int) _freeModelFn;
   late final void Function(Pointer<LlamaDartTokens>) _freeTokensFn;
   late final void Function(Pointer<Utf8>) _freeStringFn;
   
-  // NEW: Додаткові функції
+  // Додаткові функції
   late final void Function(Pointer<LlamaDartContext>) _cancelGenerationFn;
   late final bool Function(Pointer<LlamaDartContext>) _isGeneratingFn;
   late final void Function(Pointer<LlamaDartContext>) _clearKvCacheFn;
   late final int Function(Pointer<LlamaDartContext>) _getKvCachePosFn;
+  
+  // Async функції
+  late final void Function(Pointer<LlamaDartContext>, Pointer<LlamaDartTokens>, Pointer<LlamaDartInferenceParams>, int) _generateAsyncFn;
+  late final int Function(Pointer<Void>) _initDartApiDLFn;
   
   LlamaBindings._internal() {
     try {
@@ -45,7 +43,7 @@ class LlamaBindings {
       _isInitialized = true;
       debugPrint('LlamaBindings initialized successfully');
     } catch (e) {
-      debugPrint('ERROR initializing LlamaBindings: $e');
+      debugPrint('ERROR initializing LlamaBindings: ');
       _isInitialized = false;
       rethrow;
     }
@@ -56,7 +54,7 @@ class LlamaBindings {
   DynamicLibrary _loadLibrary() {
     debugPrint('Loading native library...');
     if (Platform.isAndroid) {
-      return DynamicLibrary. open('libllama_bindings.so');
+      return DynamicLibrary.open('libllama_bindings.so');
     } else if (Platform.isIOS) {
       return DynamicLibrary.process();
     } else if (Platform.isLinux) {
@@ -64,23 +62,30 @@ class LlamaBindings {
     } else if (Platform.isMacOS) {
       return DynamicLibrary.open('libllama_bindings.dylib');
     } else if (Platform.isWindows) {
-      return DynamicLibrary.open('llama_bindings. dll');
+      return DynamicLibrary.open('llama_bindings.dll');
     }
     throw UnsupportedError('Platform not supported');
   }
   
   void _initBindings() {
     debugPrint('Initializing FFI bindings...');
-
-    final initApi = _lib.lookupFunction<
+    
+    // Initialize Dart API DL
+    try {
+      _initDartApiDLFn = _lib.lookupFunction<
         IntPtr Function(Pointer<Void>),
         int Function(Pointer<Void>)
       >('InitDartApiDL');
 
-    if (initApi(NativeApi.initializeApiDLData) != 0) {
-      throw Exception('Failed to initialize Dart API');
+      final initResult = _initDartApiDLFn(NativeApi.initializeApiDLData);
+      if (initResult != 0) {
+        throw Exception('Failed to initialize Dart API DL');
+      }
+      debugPrint('Dart API DL initialized');
+    } catch (e) {
+      debugPrint('WARNING: Failed to lookup InitDartApiDL: $e');
     }
-    
+
     _loadModelFn = _lib.lookupFunction<
       Int32 Function(Pointer<Utf8>, Pointer<LlamaDartModelParams>),
       int Function(Pointer<Utf8>, Pointer<LlamaDartModelParams>)
@@ -100,23 +105,8 @@ class LlamaBindings {
       Pointer<Utf8> Function(Pointer<LlamaDartContext>, Pointer<LlamaDartTokens>, Pointer<LlamaDartInferenceParams>),
       Pointer<Utf8> Function(Pointer<LlamaDartContext>, Pointer<LlamaDartTokens>, Pointer<LlamaDartInferenceParams>)
     >('llama_dart_generate');
-
-    _generateAsyncFn = _lib.lookupFunction<
-      Void Function(
-        Pointer<LlamaDartContext>,
-        Pointer<LlamaDartTokens>,
-        Pointer<LlamaDartInferenceParams>,
-        Int64
-      ),
-      void Function(
-        Pointer<LlamaDartContext>,
-        Pointer<LlamaDartTokens>,
-        Pointer<LlamaDartInferenceParams>,
-        int
-      )
-    >('llama_dart_generate_async');
     
-    _freeContextFn = _lib. lookupFunction<
+    _freeContextFn = _lib.lookupFunction<
       Void Function(Pointer<LlamaDartContext>),
       void Function(Pointer<LlamaDartContext>)
     >('llama_dart_free_context');
@@ -136,7 +126,7 @@ class LlamaBindings {
       void Function(Pointer<Utf8>)
     >('llama_dart_free_string');
     
-    // NEW: Ініціалізація додаткових функцій
+    // Ініціалізація додаткових функцій
     _cancelGenerationFn = _lib.lookupFunction<
       Void Function(Pointer<LlamaDartContext>),
       void Function(Pointer<LlamaDartContext>)
@@ -156,12 +146,22 @@ class LlamaBindings {
       Int32 Function(Pointer<LlamaDartContext>),
       int Function(Pointer<LlamaDartContext>)
     >('llama_dart_get_kv_cache_pos');
+
+    // Async generation
+    try {
+      _generateAsyncFn = _lib.lookupFunction<
+        Void Function(Pointer<LlamaDartContext>, Pointer<LlamaDartTokens>, Pointer<LlamaDartInferenceParams>, Int64),
+        void Function(Pointer<LlamaDartContext>, Pointer<LlamaDartTokens>, Pointer<LlamaDartInferenceParams>, int)
+      >('llama_dart_generate_async');
+    } catch (e) {
+      debugPrint('WARNING: Failed to lookup llama_dart_generate_async: $e');
+    }
     
     debugPrint('FFI bindings initialized');
   }
   
   void _ensureInitialized() {
-    if (! _isInitialized) {
+    if (!_isInitialized) {
       throw StateError('LlamaBindings not initialized');
     }
   }
@@ -190,14 +190,14 @@ class LlamaBindings {
     int nGpuLayers = 0,
     int quantizationType = 4,
     int seed = 0,
-    int nBatch = 512,  // ВИПРАВЛЕННЯ #5: збільшено з 256
+    int nBatch = 512,  // збільшено з 256
   }) {
     _ensureInitialized();
     debugPrint('=== FFI: loadModel ===');
     debugPrint('Path: $path');
     
     Pointer<Utf8>? pathPtr;
-    Pointer<LlamaDartModelParams>?  params;
+    Pointer<LlamaDartModelParams>? params;
     
     try {
       pathPtr = path.toNativeUtf8();
@@ -229,8 +229,8 @@ class LlamaBindings {
   Pointer<LlamaDartContext> createContext(
     int modelId, {
     int contextLength = 1024,
-    int batchSize = 512,  // ВИПРАВЛЕННЯ #5: збільшено з 256
-    int?  threads,
+    int batchSize = 512,  // збільшено з 256
+    int? threads,
   }) {
     _ensureInitialized();
     debugPrint('=== FFI: createContext ===');
@@ -300,7 +300,7 @@ class LlamaBindings {
     }
   }
   
-  /// Генерує текст - ОНОВЛЕНО з timeout та clearKvCache
+  /// Генерує текст (синхронно)
   String generate(
     Pointer<LlamaDartContext> context,
     Pointer<LlamaDartTokens> tokens, {
@@ -313,8 +313,8 @@ class LlamaBindings {
     int seed = 0,
     double frequencyPenalty = 0.0,
     double presencePenalty = 0.0,
-    int timeoutMs = 60000,  // NEW: 60 секунд default
-    bool clearKvCache = true,  // NEW: очищати KV-cache за замовчуванням
+    int timeoutMs = 90000,
+    bool clearKvCache = true,
   }) {
     _ensureInitialized();
     debugPrint('=== FFI: generate ===');
@@ -330,12 +330,12 @@ class LlamaBindings {
       return 'Error: Tokens is null';
     }
     
-    Pointer<LlamaDartInferenceParams>?  params;
+    Pointer<LlamaDartInferenceParams>? params;
     
     try {
       params = calloc<LlamaDartInferenceParams>();
       
-      params.ref. maxTokens = maxTokens;
+      params.ref.maxTokens = maxTokens;
       params.ref.contextLength = contextLength;
       params.ref.temperature = temperature;
       params.ref.topP = topP;
@@ -384,9 +384,8 @@ class LlamaBindings {
     }
   }
 
-  /// Generates text asynchronously
-  void generateAsync(
-    SendPort sendPort,
+  /// Асинхронна генерація
+  Future<String> generateAsync(
     Pointer<LlamaDartContext> context,
     Pointer<LlamaDartTokens> tokens, {
     int maxTokens = 256,
@@ -398,25 +397,20 @@ class LlamaBindings {
     int seed = 0,
     double frequencyPenalty = 0.0,
     double presencePenalty = 0.0,
-    int timeoutMs = 60000,
+    int timeoutMs = 90000,
     bool clearKvCache = true,
-  }) {
+  }) async {
     _ensureInitialized();
     debugPrint('=== FFI: generateAsync ===');
-
-    if (context == nullptr) {
-      throw ArgumentError('Context is null');
-    }
-
-    if (tokens == nullptr) {
-      throw ArgumentError('Tokens are null');
-    }
-
+    
+    if (context == nullptr) return 'Error: Context is null';
+    if (tokens == nullptr) return 'Error: Tokens is null';
+    
+    final receivePort = ReceivePort();
     Pointer<LlamaDartInferenceParams>? params;
-
+    
     try {
       params = calloc<LlamaDartInferenceParams>();
-
       params.ref.maxTokens = maxTokens;
       params.ref.contextLength = contextLength;
       params.ref.temperature = temperature;
@@ -428,19 +422,21 @@ class LlamaBindings {
       params.ref.presencePenalty = presencePenalty;
       params.ref.timeoutMs = timeoutMs;
       params.ref.clearKvCache = clearKvCache;
-
-      debugPrint('Calling _generateAsyncFn...');
-      _generateAsyncFn(
-        context,
-        tokens,
-        params,
-        sendPort.nativePort,
-      );
-
+      
+      _generateAsyncFn(context, tokens, params, receivePort.sendPort.nativePort);
+      
+      final result = await receivePort.first;
+      if (result is String) {
+        return result;
+      } else {
+        return 'Error: Invalid result type';
+      }
+      
     } catch (e) {
       debugPrint('ERROR in generateAsync: $e');
-      throw Exception('Error starting async generation: $e');
+      return 'Error: $e';
     } finally {
+      receivePort.close();
       if (params != null) {
         calloc.free(params);
       }
@@ -468,7 +464,7 @@ class LlamaBindings {
   
   /// Перевіряє чи генерація активна
   bool isGenerating(Pointer<LlamaDartContext> context) {
-    if (! _isInitialized) return false;
+    if (!_isInitialized) return false;
     
     if (context == nullptr) return false;
     
@@ -482,7 +478,7 @@ class LlamaBindings {
   
   /// Очищає KV-cache
   void clearKvCache(Pointer<LlamaDartContext> context) {
-    if (! _isInitialized) return;
+    if (!_isInitialized) return;
     
     if (context == nullptr) return;
     
@@ -519,9 +515,9 @@ class LlamaBindings {
       return;
     }
     
-    final handle = context.ref. handle;
+    final handle = context.ref.handle;
     
-    // ВИПРАВЛЕННЯ #4: Guard проти double-free
+    // Guard проти double-free
     if (_freedContexts.contains(handle)) {
       debugPrint('WARNING: Context $handle already freed, skipping');
       return;
@@ -563,7 +559,7 @@ class LlamaBindings {
     
     final address = tokens.address;
     
-    // ВИПРАВЛЕННЯ #4: Guard проти double-free
+    // Guard проти double-free
     if (_freedTokens.contains(address)) {
       debugPrint('WARNING: Tokens at $address already freed, skipping');
       return;

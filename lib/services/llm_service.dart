@@ -1,8 +1,6 @@
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
-import 'dart:isolate';
-import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
@@ -309,7 +307,7 @@ class LlmService extends ChangeNotifier {
       
       debugPrint('Starting generation (maxTokens: $maxTokens, timeout: ${timeoutMs}ms)...');
       
-      final result = _bindings!.generate(
+      final result = await _bindings!.generateAsync(
         _currentContext!,
         tokens,
         maxTokens: maxTokens,
@@ -321,7 +319,7 @@ class LlmService extends ChangeNotifier {
         frequencyPenalty: 0.1,
         presencePenalty: 0.1,
         timeoutMs: timeoutMs,
-        clearKvCache: ! _useIncrementalKvCache,
+        clearKvCache: !_useIncrementalKvCache,
       );
       
       debugPrint('Generation completed, result length: ${result.length}');
@@ -380,102 +378,46 @@ class LlmService extends ChangeNotifier {
     StreamController<String> controller,
     String streamId,
   ) async {
-    if (!isModelLoaded) {
+    if (! isModelLoaded) {
       debugPrint('ERROR: Model not loaded for stream $streamId');
-      if (!controller.isClosed) {
-        controller.addError('Model not loaded');
+      if (! controller.isClosed) {
+        controller. addError('Model not loaded');
         await controller.close();
       }
-      _generationControllers.remove(streamId);
+      _generationControllers. remove(streamId);
       return;
     }
-
-    if (_isGenerating) {
-      debugPrint('ERROR: Generation already in progress for stream $streamId');
-      if (!controller.isClosed) {
-        controller.addError('Error: Generation already in progress');
-        await controller.close();
-      }
-      return;
-    }
-
-    _isGenerating = true;
-    _shouldStop = false;
-    Pointer<LlamaDartTokens>? tokens;
-    ReceivePort? receivePort;
-
+    
     try {
-      tokens = _bindings!.tokenize(_currentContext!, prompt);
-      if (tokens == nullptr) {
-        throw Exception('Tokenization failed');
-      }
-
-      final kvPos = _bindings!.getKvCachePosition(_currentContext!);
-      final inputTokens = tokens.ref.nTokens;
-      final totalNeeded = kvPos + inputTokens + maxTokens;
-
-      if (totalNeeded > _contextLength) {
-        _bindings!.clearKvCache(_currentContext!);
-      }
-
-      _usedTokens = inputTokens + maxTokens;
-      Future.microtask(() => _safeNotifyListeners());
-
-      receivePort = ReceivePort();
-      final completer = Completer<String>();
-
-      debugPrint('[$streamId] Listening on receive port...');
-      receivePort.listen(
-        (dynamic message) {
-          debugPrint('[$streamId] Received message: $message');
-          if (message is String) {
-            completer.complete(message);
-          } else {
-            completer.completeError('Unexpected message type: ${message.runtimeType}');
-          }
-          receivePort?.close();
-        },
-        onError: (error) {
-          debugPrint('[$streamId] Received error on port: $error');
-          completer.completeError(error);
-          receivePort?.close();
-        },
-      );
-
-      debugPrint('[$streamId] Calling generateAsync in C++...');
-      _bindings!.generateAsync(
-        receivePort.sendPort,
-        _currentContext!,
-        tokens,
+      // Генеруємо повну відповідь
+      debugPrint('Generating response for stream $streamId...');
+      String result = await generateResponse(
+        prompt, 
         maxTokens: maxTokens,
         timeoutMs: timeoutMs,
-        clearKvCache: !_useIncrementalKvCache,
       );
-
-      debugPrint('[$streamId] Waiting for C++ result with timeout...');
-      final result = await completer.future.timeout(
-        Duration(milliseconds: timeoutMs + 5000), // Add 5s buffer to C++ timeout
-        onTimeout: () {
-          debugPrint('[$streamId] Dart-side timeout reached!');
-          throw TimeoutException('Generation timed out on the Dart side.');
-        },
-      );
-
-      debugPrint('[$streamId] C++ result received: ${result.substring(0, min(result.length, 100))}...');
-
-      if (result.startsWith('Error:')) {
-        throw Exception(result);
-      }
       
+      // Перевіряємо чи не було скасовано
       if (_shouldStop || controller.isClosed) {
         debugPrint('Stream $streamId was stopped/closed');
         if (!controller.isClosed) {
           await controller.close();
         }
-        _generationControllers.remove(streamId);
+        _generationControllers. remove(streamId);
         return;
       }
-
+      
+      // Перевіряємо на помилку
+      if (result.startsWith('Error:')) {
+        debugPrint('Generation returned error: $result');
+        if (!controller.isClosed) {
+          controller. addError(result);
+          await controller.close();
+        }
+        _generationControllers. remove(streamId);
+        return;
+      }
+      
       // Стрімимо по частинах
       String accumulated = '';
       const int chunkSize = 3;
@@ -518,25 +460,19 @@ class LlmService extends ChangeNotifier {
         controller.add(accumulated);
         await controller.close();
       }
-
+      
+      debugPrint('=== STREAM $streamId COMPLETE ===');
+      
     } catch (e, stackTrace) {
       debugPrint('ERROR in stream $streamId: $e');
       debugPrint('Stack: $stackTrace');
-      if (!controller.isClosed) {
+      
+      if (! controller.isClosed) {
         controller.addError('Error: $e');
-      }
-    } finally {
-      _isGenerating = false;
-      _usedTokens = _bindings?.getKvCachePosition(_currentContext!) ?? _usedTokens;
-      if (tokens != null && tokens != nullptr) {
-        _bindings!.freeTokenizedText(tokens);
-      }
-      receivePort?.close();
-      if (!controller.isClosed) {
         await controller.close();
       }
-      _generationControllers.remove(streamId);
-      debugPrint('=== STREAM $streamId COMPLETE ===');
+    } finally {
+      _generationControllers. remove(streamId);
     }
   }
   
