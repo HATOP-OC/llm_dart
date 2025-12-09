@@ -229,7 +229,7 @@ class LlmService extends ChangeNotifier {
   
   Future<String> generateResponse(String prompt, {
     int maxTokens = 256,
-    int timeoutMs = 60000,  // NEW: 60 секунд timeout
+    int timeoutMs = 300000,  // NEW: 60 секунд timeout
   }) async {
     debugPrint('=== GENERATE RESPONSE START ===');
     
@@ -350,7 +350,7 @@ class LlmService extends ChangeNotifier {
   
   Stream<String> generateResponseStream(String prompt, {
     int maxTokens = 256,
-    int timeoutMs = 60000,
+    int timeoutMs = 300000,
   }) {
     final streamId = DateTime.now().millisecondsSinceEpoch.toString();
     debugPrint('=== STREAM START: $streamId ===');
