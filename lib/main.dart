@@ -37,7 +37,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'LLM Chat',
+      title: 'Assistant_OC',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,
@@ -182,7 +182,7 @@ class _AppScaffoldState extends State<AppScaffold> {
       case 3:
         return AppBar(title: const Text('Info'));
       default:
-        return AppBar(title: const Text('LLM Chat'));
+        return AppBar(title: const Text('AssistantOC'));
     }
   }
 

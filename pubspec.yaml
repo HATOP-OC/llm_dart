@@ -1,4 +1,4 @@
-name: myapp
+name: assistant_oc
 description: "Flutter app for running small LLM models locally on Android devices."
 
 publish_to: 'none'
