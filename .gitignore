@@ -32,11 +32,6 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
-android/app/src/main/cpp/llama/
-android/app/src/main/cpp/llama.cpp
-android/app/src/main/cpp/llama*
-android/app/src/main/cpp/llama.cpp
-/home/user/myapp/android/app/src/main/cpp/llama.cpp
 # Symbolication related
 app.*.symbols
 
