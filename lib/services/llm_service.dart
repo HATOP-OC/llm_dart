@@ -72,9 +72,11 @@ class LlmService extends ChangeNotifier {
   /// Returns the safe max tokens for a model, considering thermal protection
   int getThermalSafeMaxTokens(int modelMaxTokens) {
     if (_thermalProtection) {
-      return modelMaxTokens;
+      // When thermal protection is enabled, use the model's safe limit
+      return modelMaxTokens.clamp(1, 256);
     }
-    return 256; // Default max when thermal protection is off
+    // When thermal protection is disabled, allow full max
+    return modelMaxTokens;
   }
   
   void setContextLength(int length) {

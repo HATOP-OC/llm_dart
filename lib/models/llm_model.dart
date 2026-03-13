@@ -93,7 +93,7 @@ class LlmModel {
       size: map['size'],
       status: ModelStatus.values[map['status']],
       quantization: QuantizationType.values[map['quantization']],
-      modelType: map['modelType'] != null
+      modelType: map['modelType'] != null && map['modelType'] < ModelType.values.length
           ? ModelType.values[map['modelType']]
           : ModelType.text,
       maxTokens: map['maxTokens'] ?? 256,

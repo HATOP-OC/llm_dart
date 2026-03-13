@@ -32,6 +32,10 @@ class _ChatScreenState extends State<ChatScreen> {
   // Attachment state
   String? _pendingAttachmentPath;
   AttachmentType _pendingAttachmentType = AttachmentType.none;
+
+  static const _imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
+  static const _fileExtensions = ['txt', 'pdf', 'json', 'csv', 'md', 'log',
+                                   'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'];
   
   DateTime _lastUIUpdate = DateTime.now();
   static const _uiUpdateInterval = Duration(milliseconds: 50);
@@ -105,15 +109,14 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['txt', 'pdf', 'json', 'csv', 'md', 'log',
-                            'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'],
+        allowedExtensions: _fileExtensions,
         withData: false,
         withReadStream: false,
       );
       if (result != null && result.files.single.path != null) {
         final filePath = result.files.single.path!;
         final ext = p.extension(filePath).toLowerCase();
-        final isImage = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'].contains(ext);
+        final isImage = _imageExtensions.contains(ext);
         
         final savedPath = await _copyFileToAppDir(filePath);
         if (savedPath != null) {
