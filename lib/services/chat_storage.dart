@@ -28,10 +28,20 @@ class ChatStorage extends ChangeNotifier {
           'CREATE TABLE chats(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, created_at TEXT, updated_at TEXT, is_archived INTEGER)',
         );
         await db.execute(
-          'CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER, content TEXT, is_user INTEGER, timestamp TEXT, FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE)',
+          'CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER, content TEXT, is_user INTEGER, timestamp TEXT, attachment_path TEXT, attachment_type INTEGER DEFAULT 0, FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE)',
         );
       },
-      version: 1,
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          await db.execute(
+            'ALTER TABLE messages ADD COLUMN attachment_path TEXT',
+          );
+          await db.execute(
+            'ALTER TABLE messages ADD COLUMN attachment_type INTEGER DEFAULT 0',
+          );
+        }
+      },
+      version: 2,
       onConfigure: (db) async {
         await db.execute('PRAGMA foreign_keys = ON');
       },
@@ -94,7 +104,10 @@ class ChatStorage extends ChangeNotifier {
     return chat;
   }
 
-  Future<void> addMessage(int chatId, String content, bool isUser) async {
+  Future<void> addMessage(int chatId, String content, bool isUser, {
+    String? attachmentPath,
+    int attachmentType = 0,
+  }) async {
     final now = DateTime.now();
     
     final messageId = await _database.insert(
@@ -104,6 +117,8 @@ class ChatStorage extends ChangeNotifier {
         'content': content,
         'is_user': isUser ? 1 : 0,
         'timestamp': now.toIso8601String(),
+        'attachment_path': attachmentPath,
+        'attachment_type': attachmentType,
       },
     );
     
@@ -124,6 +139,8 @@ class ChatStorage extends ChangeNotifier {
           content: content,
           isUser: isUser,
           timestamp: now,
+          attachmentPath: attachmentPath,
+          attachmentType: AttachmentType.values[attachmentType],
         ));
       
       _chats[chatIndex] = chat.copyWith(

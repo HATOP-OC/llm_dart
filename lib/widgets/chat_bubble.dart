@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -29,7 +30,7 @@ class ChatBubble extends StatelessWidget {
         decoration: BoxDecoration(
           color: message.isUser 
               ? Colors. blue. shade700 
-              : const Color(0xFF2D2D2D), // Замість shade850
+              : const Color(0xFF2D2D2D),
           borderRadius: BorderRadius. only(
             topLeft: const Radius.circular(18),
             topRight: const Radius. circular(18),
@@ -38,7 +39,7 @@ class ChatBubble extends StatelessWidget {
           ),
           boxShadow: [
             BoxShadow(
-              color: Colors.black. withValues(alpha: 0.2), // Замість withOpacity
+              color: Colors.black. withValues(alpha: 0.2),
               blurRadius: 4,
               offset: const Offset(0, 2),
             ),
@@ -47,15 +48,21 @@ class ChatBubble extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            message.isUser
-                ? Text(
-                    message.content,
-                    style: const TextStyle(
-                      color: Colors. white,
-                      fontSize: 15,
-                    ),
-                  )
-                : MarkdownBody(
+            // Attachment display
+            if (message.hasAttachment) ...[
+              _buildAttachment(context),
+              if (message.content.isNotEmpty) const SizedBox(height: 8),
+            ],
+            if (message.content.isNotEmpty)
+              message.isUser
+                  ? Text(
+                      message.content,
+                      style: const TextStyle(
+                        color: Colors. white,
+                        fontSize: 15,
+                      ),
+                    )
+                  : MarkdownBody(
                     data: _preprocessMarkdown(message. content),
                     selectable: true,
                     onTapLink: (text, href, title) {
@@ -145,6 +152,61 @@ class ChatBubble extends StatelessWidget {
     );
     
     return processed;
+  }
+
+  Widget _buildAttachment(BuildContext context) {
+    if (message.attachmentType == AttachmentType.image) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Image.file(
+          File(message.attachmentPath!),
+          width: double.infinity,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => Container(
+            height: 100,
+            decoration: BoxDecoration(
+              color: Colors.grey.shade800,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.broken_image, color: Colors.grey, size: 32),
+                  SizedBox(height: 4),
+                  Text('Image not available', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    } else {
+      // File attachment
+      final fileName = message.attachmentPath!.split('/').last;
+      return Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade800,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.insert_drive_file, color: Colors.blue, size: 24),
+            const SizedBox(width: 8),
+            Flexible(
+              child: Text(
+                fileName,
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
   }
   
   String _formatTime(DateTime time) {

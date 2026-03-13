@@ -13,6 +13,12 @@ enum QuantizationType {
   bit8,
 }
 
+enum ModelType {
+  text,
+  audioGeneration,
+  imageGeneration,
+}
+
 class LlmModel {
   final String id;
   final String name;
@@ -22,6 +28,8 @@ class LlmModel {
   final ModelStatus status;
   final double downloadProgress;
   final QuantizationType quantization;
+  final ModelType modelType;
+  final int maxTokens; // thermal-safe max tokens per generation
 
   LlmModel({
     required this.id,
@@ -32,6 +40,8 @@ class LlmModel {
     this.status = ModelStatus.notDownloaded,
     this.downloadProgress = 0.0,
     this.quantization = QuantizationType.bit4,
+    this.modelType = ModelType.text,
+    this.maxTokens = 256,
   });
 
   LlmModel copyWith({
@@ -43,6 +53,8 @@ class LlmModel {
     ModelStatus? status,
     double? downloadProgress,
     QuantizationType? quantization,
+    ModelType? modelType,
+    int? maxTokens,
   }) {
     return LlmModel(
       id: id ?? this.id,
@@ -53,6 +65,8 @@ class LlmModel {
       status: status ?? this.status,
       downloadProgress: downloadProgress ?? this.downloadProgress,
       quantization: quantization ?? this.quantization,
+      modelType: modelType ?? this.modelType,
+      maxTokens: maxTokens ?? this.maxTokens,
     );
   }
 
@@ -65,6 +79,8 @@ class LlmModel {
       'size': size,
       'status': status.index,
       'quantization': quantization.index,
+      'modelType': modelType.index,
+      'maxTokens': maxTokens,
     };
   }
 
@@ -77,6 +93,10 @@ class LlmModel {
       size: map['size'],
       status: ModelStatus.values[map['status']],
       quantization: QuantizationType.values[map['quantization']],
+      modelType: map['modelType'] != null
+          ? ModelType.values[map['modelType']]
+          : ModelType.text,
+      maxTokens: map['maxTokens'] ?? 256,
     );
   }
 }

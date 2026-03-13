@@ -15,6 +15,7 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   int _contextLength = 2048;
   bool _saveChatHistory = true;
+  bool _thermalProtection = true;
   QuantizationType _defaultQuantization = QuantizationType.bit4;
 
   late SharedPreferences _prefs;
@@ -32,6 +33,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() {
       _contextLength = _prefs.getInt('context_length') ?? 2048;
       _saveChatHistory = _prefs.getBool('save_chat_history') ?? true;
+      _thermalProtection = _prefs.getBool('thermal_protection') ?? true;
       _defaultQuantization = _prefs.getInt('default_quantization') == 8
           ? QuantizationType.bit8
           : QuantizationType.bit4;
@@ -42,6 +44,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _saveSettings() async {
     await _prefs.setInt('context_length', _contextLength);
     await _prefs.setBool('save_chat_history', _saveChatHistory);
+    await _prefs.setBool('thermal_protection', _thermalProtection);
     await _prefs.setInt(
       'default_quantization',
       _defaultQuantization == QuantizationType.bit8 ? 8 : 4,
@@ -51,6 +54,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) {
       final llmService = Provider.of<LlmService>(context, listen: false);
       llmService.setContextLength(_contextLength);
+      llmService.setThermalProtection(_thermalProtection);
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -179,6 +183,58 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Text(
                   'This is the default setting for new models. Lower bitness (4-bit) means less memory usage, but may reduce the quality of responses.',
                   style: TextStyle(color: Colors.grey[500], fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 16),
+
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Thermal Protection',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 16),
+                SwitchListTile(
+                  title: const Text('Enable thermal protection'),
+                  subtitle: Text(
+                    'Limits generation tokens for audio/image models to prevent device overheating',
+                    style: TextStyle(color: Colors.grey[500]),
+                  ),
+                  value: _thermalProtection,
+                  onChanged: (value) {
+                    setState(() {
+                      _thermalProtection = value;
+                    });
+                  },
+                ),
+                const SizedBox(height: 8),
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+                  ),
+                  child: const Row(
+                    children: [
+                      Icon(Icons.warning_amber, color: Colors.orange, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Disabling thermal protection may cause your device to overheat during audio/image generation. Use at your own risk.',
+                          style: TextStyle(color: Colors.orange, fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),

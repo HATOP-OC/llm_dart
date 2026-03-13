@@ -93,6 +93,14 @@ class InfoScreen extends StatelessWidget {
                   Text(
                     'The application uses optimized models that run entirely on your device, ensuring privacy and the ability to use it without an internet connection.',
                   ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Supports text generation, audio generation (TTS), and small image generation models with built-in thermal protection to prevent device overheating.',
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'You can attach files and images to your messages for richer conversations.',
+                  ),
                 ],
               ),
             ),
@@ -131,6 +139,21 @@ class InfoScreen extends StatelessWidget {
                     Icons.speed,
                     'Optimized Inference',
                     'Using llama.cpp for efficient token generation',
+                  ),
+                  _buildInfoTile(
+                    Icons.audiotrack,
+                    'Audio Generation',
+                    'TTS models for text-to-speech with thermal limits',
+                  ),
+                  _buildInfoTile(
+                    Icons.image,
+                    'Image Generation',
+                    'Small diffusion models (256x256) with overheating protection',
+                  ),
+                  _buildInfoTile(
+                    Icons.attach_file,
+                    'File & Image Upload',
+                    'Attach files and images to your chat messages',
                   ),
                 ],
               ),

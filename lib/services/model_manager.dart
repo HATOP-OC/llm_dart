@@ -46,6 +46,7 @@ class ModelManager extends ChangeNotifier {
         url: 'https://huggingface.co/unsloth/gemma-3n-E2B-it-GGUF/resolve/main/gemma-3n-E2B-it-Q4_K_M.gguf?download=true',
         size: 3030000000,
         quantization: QuantizationType.bit4,
+        modelType: ModelType.text,
       ),
       LlmModel(
         id: 'phi-3-mini-4k-instruct-q4',
@@ -54,6 +55,7 @@ class ModelManager extends ChangeNotifier {
         url: 'https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf?download=true',
         size: 2390000000,
         quantization: QuantizationType.bit4,
+        modelType: ModelType.text,
       ),
       LlmModel(
         id: 'llama-3. 2-1b-instruct-q4_k_m',
@@ -62,6 +64,7 @@ class ModelManager extends ChangeNotifier {
         url: 'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf?download=true',
         size: 808000000,
         quantization: QuantizationType.bit4,
+        modelType: ModelType.text,
       ),
       LlmModel(
         id: 'qwen2. 5-1.5b-instruct-q4_k_m',
@@ -70,6 +73,29 @@ class ModelManager extends ChangeNotifier {
         url: 'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf?download=true',
         size: 986000000,
         quantization: QuantizationType.bit4,
+        modelType: ModelType.text,
+      ),
+      // Audio generation model (TTS)
+      LlmModel(
+        id: 'outte-tts-0.3-0.5b-q4_k_m',
+        name: 'OuteTTS 0.3 0.5B (Q4_K_M)',
+        description: 'Lightweight TTS model for audio generation. ⚠️ Uses limited resources to prevent overheating.',
+        url: 'https://huggingface.co/OuteAI/OuteTTS-0.3-0.5B-GGUF/resolve/main/OuteTTS-0.3-0.5B-Q4_K_M.gguf?download=true',
+        size: 534000000,
+        quantization: QuantizationType.bit4,
+        modelType: ModelType.audioGeneration,
+        maxTokens: 128,
+      ),
+      // Small image generation model
+      LlmModel(
+        id: 'stable-diffusion-v1-5-pruned-q4_0',
+        name: 'Stable Diffusion v1.5 (Q4_0, Tiny)',
+        description: 'Minimal image generation model. ⚠️ Thermal-safe: limited resolution (256x256) and steps to prevent overheating.',
+        url: 'https://huggingface.co/second-state/stable-diffusion-v-1-5-GGUF/resolve/main/stable-diffusion-v1-5-pruned-emaonly-Q4_0.gguf?download=true',
+        size: 1070000000,
+        quantization: QuantizationType.bit4,
+        modelType: ModelType.imageGeneration,
+        maxTokens: 64,
       ),
     ];
     

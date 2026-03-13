@@ -55,12 +55,20 @@ class Chat {
   }
 }
 
+enum AttachmentType {
+  none,
+  image,
+  file,
+}
+
 class Message {
   final int? id;
   final int chatId;
   final String content;
   final bool isUser;
   final DateTime timestamp;
+  final String? attachmentPath;
+  final AttachmentType attachmentType;
 
   Message({
     this.id,
@@ -68,7 +76,12 @@ class Message {
     required this.content,
     required this.isUser,
     required this.timestamp,
+    this.attachmentPath,
+    this.attachmentType = AttachmentType.none,
   });
+
+  bool get hasAttachment =>
+      attachmentType != AttachmentType.none && attachmentPath != null;
 
   Map<String, dynamic> toMap() {
     return {
@@ -77,6 +90,8 @@ class Message {
       'content': content,
       'is_user': isUser ? 1 : 0,
       'timestamp': timestamp.toIso8601String(),
+      'attachment_path': attachmentPath,
+      'attachment_type': attachmentType.index,
     };
   }
 
@@ -87,6 +102,10 @@ class Message {
       content: map['content'],
       isUser: map['is_user'] == 1,
       timestamp: DateTime.parse(map['timestamp']),
+      attachmentPath: map['attachment_path'],
+      attachmentType: map['attachment_type'] != null
+          ? AttachmentType.values[map['attachment_type']]
+          : AttachmentType.none,
     );
   }
 }
