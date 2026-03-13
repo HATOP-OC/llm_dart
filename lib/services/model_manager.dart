@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -39,6 +40,7 @@ class ModelManager extends ChangeNotifier {
     _activeModelId = _prefs.getString('active_model_id');
     
     _models = [
+      // --- Google ---
       LlmModel(
         id: 'gemma-3n-E2B-it-Q4_K_M',
         name: 'Gemma 3n E2B It (4-bit)',
@@ -48,30 +50,112 @@ class ModelManager extends ChangeNotifier {
         quantization: QuantizationType.bit4,
       ),
       LlmModel(
+        id: 'gemma-2-2b-it-Q4_K_M',
+        name: 'Gemma 2 2B Instruct (Q4_K_M)',
+        description: 'Efficient 2B model from Google DeepMind.',
+        url: 'https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf?download=true',
+        size: 1630000000,
+        quantization: QuantizationType.bit4,
+      ),
+      // --- Microsoft ---
+      LlmModel(
         id: 'phi-3-mini-4k-instruct-q4',
         name: 'Phi-3 Mini Instruct (4-bit)',
-        description: 'A 3. 8B parameter model from Microsoft.',
+        description: 'A 3.8B parameter model from Microsoft.',
         url: 'https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf?download=true',
         size: 2390000000,
         quantization: QuantizationType.bit4,
       ),
       LlmModel(
-        id: 'llama-3. 2-1b-instruct-q4_k_m',
-        name: 'Llama 3. 2 1B Instruct (Q4_K_M)',
+        id: 'phi-3.5-mini-instruct-Q4_K_M',
+        name: 'Phi-3.5 Mini Instruct (Q4_K_M)',
+        description: 'An improved 3.8B model from Microsoft with better reasoning.',
+        url: 'https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf?download=true',
+        size: 2390000000,
+        quantization: QuantizationType.bit4,
+      ),
+      // --- Meta ---
+      LlmModel(
+        id: 'llama-3.2-1b-instruct-q4_k_m',
+        name: 'Llama 3.2 1B Instruct (Q4_K_M)',
         description: 'Compact 1B model from Meta.',
         url: 'https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf?download=true',
         size: 808000000,
         quantization: QuantizationType.bit4,
       ),
       LlmModel(
-        id: 'qwen2. 5-1.5b-instruct-q4_k_m',
-        name: 'Qwen 2.5 1. 5B Instruct (Q4_K_M)',
+        id: 'llama-3.2-3b-instruct-Q4_K_M',
+        name: 'Llama 3.2 3B Instruct (Q4_K_M)',
+        description: 'Capable 3B model from Meta with strong performance.',
+        url: 'https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf?download=true',
+        size: 2020000000,
+        quantization: QuantizationType.bit4,
+      ),
+      // --- Alibaba ---
+      LlmModel(
+        id: 'qwen2.5-0.5b-instruct-q4_k_m',
+        name: 'Qwen 2.5 0.5B Instruct (Q4_K_M)',
+        description: 'Ultra-compact 0.5B model from Alibaba, great for fast responses.',
+        url: 'https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf?download=true',
+        size: 397000000,
+        quantization: QuantizationType.bit4,
+      ),
+      LlmModel(
+        id: 'qwen2.5-1.5b-instruct-q4_k_m',
+        name: 'Qwen 2.5 1.5B Instruct (Q4_K_M)',
         description: 'Efficient 1.5B model from Alibaba.',
         url: 'https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf?download=true',
         size: 986000000,
         quantization: QuantizationType.bit4,
       ),
+      LlmModel(
+        id: 'qwen2.5-3b-instruct-q4_k_m',
+        name: 'Qwen 2.5 3B Instruct (Q4_K_M)',
+        description: 'Strong 3B model from Alibaba with good multilingual support.',
+        url: 'https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf?download=true',
+        size: 2020000000,
+        quantization: QuantizationType.bit4,
+      ),
+      // --- Mistral ---
+      LlmModel(
+        id: 'mistral-7b-instruct-v0.3-Q4_K_M',
+        name: 'Mistral 7B Instruct v0.3 (Q4_K_M)',
+        description: 'Powerful 7B model from Mistral AI with great instruction following.',
+        url: 'https://huggingface.co/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q4_K_M.gguf?download=true',
+        size: 4370000000,
+        quantization: QuantizationType.bit4,
+      ),
+      // --- TinyLlama ---
+      LlmModel(
+        id: 'tinyllama-1.1b-chat-v1.0-Q4_K_M',
+        name: 'TinyLlama 1.1B Chat (Q4_K_M)',
+        description: 'Ultra-light 1.1B chat model, ideal for low-resource devices.',
+        url: 'https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf?download=true',
+        size: 669000000,
+        quantization: QuantizationType.bit4,
+      ),
+      // --- HuggingFace SmolLM ---
+      LlmModel(
+        id: 'smollm2-1.7b-instruct-Q4_K_M',
+        name: 'SmolLM2 1.7B Instruct (Q4_K_M)',
+        description: 'Compact 1.7B model from HuggingFace, optimized for on-device use.',
+        url: 'https://huggingface.co/bartowski/SmolLM2-1.7B-Instruct-GGUF/resolve/main/SmolLM2-1.7B-Instruct-Q4_K_M.gguf?download=true',
+        size: 1050000000,
+        quantization: QuantizationType.bit4,
+      ),
+      // --- DeepSeek ---
+      LlmModel(
+        id: 'deepseek-r1-distill-qwen-1.5b-Q4_K_M',
+        name: 'DeepSeek R1 Distill Qwen 1.5B (Q4_K_M)',
+        description: 'Reasoning-focused 1.5B model distilled from DeepSeek R1.',
+        url: 'https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-1.5B-GGUF/resolve/main/DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf?download=true',
+        size: 986000000,
+        quantization: QuantizationType.bit4,
+      ),
     ];
+    
+    // Load user-added custom models
+    await _loadCustomModels();
     
     await _checkDownloadedModels();
     
@@ -392,13 +476,18 @@ class ModelManager extends ChangeNotifier {
     
     await _prefs.remove('checksum_$modelId');
     
-    _models[modelIndex] = model. copyWith(
-      status: ModelStatus.notDownloaded,
-      downloadProgress: 0.0,
-    );
-    
     if (_activeModelId == modelId) {
       await _clearActiveModel();
+    }
+    
+    if (model.isUserAdded) {
+      _models.removeAt(modelIndex);
+      await _saveCustomModels();
+    } else {
+      _models[modelIndex] = model. copyWith(
+        status: ModelStatus.notDownloaded,
+        downloadProgress: 0.0,
+      );
     }
     
     notifyListeners();
@@ -459,6 +548,71 @@ class ModelManager extends ChangeNotifier {
   
   Future<bool> verifyModelIntegrity(String modelId) async {
     return await llmService. verifyModelChecksum(modelId);
+  }
+  
+  // --- Custom model management ---
+  
+  static const String _customModelsKey = 'custom_models';
+  
+  Future<void> _loadCustomModels() async {
+    final jsonString = _prefs.getString(_customModelsKey);
+    if (jsonString == null) return;
+    
+    try {
+      final List<dynamic> jsonList = json.decode(jsonString);
+      for (final item in jsonList) {
+        final model = LlmModel.fromMap(Map<String, dynamic>.from(item));
+        // Ensure isUserAdded flag and reset runtime status
+        final customModel = model.copyWith(
+          isUserAdded: true,
+          status: ModelStatus.notDownloaded,
+          downloadProgress: 0.0,
+        );
+        _models.add(customModel);
+      }
+    } catch (e) {
+      debugPrint('Error loading custom models: $e');
+    }
+  }
+  
+  Future<void> _saveCustomModels() async {
+    final customModels = _models
+        .where((m) => m.isUserAdded)
+        .map((m) => m.toMap())
+        .toList();
+    await _prefs.setString(_customModelsKey, json.encode(customModels));
+  }
+  
+  Future<void> addCustomModel({
+    required String name,
+    required String url,
+    required String description,
+    required int size,
+    required QuantizationType quantization,
+  }) async {
+    // Generate a unique ID from URL
+    final id = 'custom-${url.hashCode.abs()}';
+    
+    // Check if model with this ID already exists
+    if (_models.any((m) => m.id == id)) return;
+    
+    final model = LlmModel(
+      id: id,
+      name: name,
+      url: url,
+      description: description,
+      size: size,
+      quantization: quantization,
+      isUserAdded: true,
+    );
+    
+    _models.add(model);
+    await _saveCustomModels();
+    notifyListeners();
+  }
+  
+  Future<void> removeCustomModel(String modelId) async {
+    await deleteModel(modelId);
   }
 }
 

@@ -22,6 +22,7 @@ class LlmModel {
   final ModelStatus status;
   final double downloadProgress;
   final QuantizationType quantization;
+  final bool isUserAdded;
 
   LlmModel({
     required this.id,
@@ -32,6 +33,7 @@ class LlmModel {
     this.status = ModelStatus.notDownloaded,
     this.downloadProgress = 0.0,
     this.quantization = QuantizationType.bit4,
+    this.isUserAdded = false,
   });
 
   LlmModel copyWith({
@@ -43,6 +45,7 @@ class LlmModel {
     ModelStatus? status,
     double? downloadProgress,
     QuantizationType? quantization,
+    bool? isUserAdded,
   }) {
     return LlmModel(
       id: id ?? this.id,
@@ -53,6 +56,7 @@ class LlmModel {
       status: status ?? this.status,
       downloadProgress: downloadProgress ?? this.downloadProgress,
       quantization: quantization ?? this.quantization,
+      isUserAdded: isUserAdded ?? this.isUserAdded,
     );
   }
 
@@ -65,6 +69,7 @@ class LlmModel {
       'size': size,
       'status': status.index,
       'quantization': quantization.index,
+      'isUserAdded': isUserAdded,
     };
   }
 
@@ -77,6 +82,7 @@ class LlmModel {
       size: map['size'],
       status: ModelStatus.values[map['status']],
       quantization: QuantizationType.values[map['quantization']],
+      isUserAdded: map['isUserAdded'] ?? false,
     );
   }
 }
