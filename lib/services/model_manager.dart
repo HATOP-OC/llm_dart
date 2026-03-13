@@ -484,7 +484,7 @@ class ModelManager extends ChangeNotifier {
       _models.removeAt(modelIndex);
       await _saveCustomModels();
     } else {
-      _models[modelIndex] = model. copyWith(
+      _models[modelIndex] = model.copyWith(
         status: ModelStatus.notDownloaded,
         downloadProgress: 0.0,
       );
