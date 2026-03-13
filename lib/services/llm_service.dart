@@ -23,6 +23,7 @@ class LlmService extends ChangeNotifier {
   bool _isGenerating = false;
   bool _shouldStop = false;
   bool _isInitialized = false;
+  bool _thermalProtection = true;
   
   // NEW: для incremental KV-cache
   bool _useIncrementalKvCache = false;
@@ -51,13 +52,31 @@ class LlmService extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       _contextLength = prefs. getInt('context_length') ?? 1024;
       _batchSize = prefs.getInt('batch_size') ?? 512;
+      _thermalProtection = prefs.getBool('thermal_protection') ?? true;
       _isInitialized = true;
-      debugPrint('LlmService initialized, context_length: $_contextLength, batch_size: $_batchSize');
+      debugPrint('LlmService initialized, context_length: $_contextLength, batch_size: $_batchSize, thermal: $_thermalProtection');
     } catch (e) {
       debugPrint('Error initializing LlmService: $e');
       _isInitialized = false;
       rethrow;
     }
+  }
+  
+  void setThermalProtection(bool enabled) {
+    _thermalProtection = enabled;
+    debugPrint('Thermal protection: $enabled');
+  }
+  
+  bool get thermalProtection => _thermalProtection;
+  
+  /// Returns the safe max tokens for a model, considering thermal protection
+  int getThermalSafeMaxTokens(int modelMaxTokens) {
+    if (_thermalProtection) {
+      // When thermal protection is enabled, use the model's safe limit
+      return modelMaxTokens.clamp(1, 256);
+    }
+    // When thermal protection is disabled, allow full max
+    return modelMaxTokens;
   }
   
   void setContextLength(int length) {

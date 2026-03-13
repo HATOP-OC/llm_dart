@@ -1,11 +1,17 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:animated_text_kit/animated_text_kit.dart';
+import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 import '../services/chat_storage.dart';
 import '../services/llm_service.dart';
 import '../services/model_manager.dart';
 import '../services/prompt_manager.dart';
+import '../models/chat_model.dart';
 import '../widgets/chat_bubble.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -22,6 +28,14 @@ class _ChatScreenState extends State<ChatScreen> {
   String?  _currentStreamId;
   String _currentGeneratedText = "";
   StreamSubscription<String>? _streamSubscription;
+  
+  // Attachment state
+  String? _pendingAttachmentPath;
+  AttachmentType _pendingAttachmentType = AttachmentType.none;
+
+  static const _imageExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'];
+  static const _fileExtensions = ['txt', 'pdf', 'json', 'csv', 'md', 'log',
+                                   'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'];
   
   DateTime _lastUIUpdate = DateTime.now();
   static const _uiUpdateInterval = Duration(milliseconds: 50);
@@ -42,6 +56,79 @@ class _ChatScreenState extends State<ChatScreen> {
     _streamSubscription?.cancel();
     _streamSubscription = null;
     _currentStreamId = null;
+  }
+
+  void _clearPendingAttachment() {
+    _safeSetState(() {
+      _pendingAttachmentPath = null;
+      _pendingAttachmentType = AttachmentType.none;
+    });
+  }
+
+  Future<String?> _copyFileToAppDir(String sourcePath) async {
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final attachDir = Directory('${appDir.path}/attachments');
+      if (!await attachDir.exists()) {
+        await attachDir.create(recursive: true);
+      }
+      final fileName = '${DateTime.now().millisecondsSinceEpoch}_${p.basename(sourcePath)}';
+      final destPath = '${attachDir.path}/$fileName';
+      await File(sourcePath).copy(destPath);
+      return destPath;
+    } catch (e) {
+      debugPrint('Error copying file: $e');
+      return null;
+    }
+  }
+
+  Future<void> _pickImage() async {
+    try {
+      final picker = ImagePicker();
+      final image = await picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1024,
+        maxHeight: 1024,
+        imageQuality: 80,
+      );
+      if (image != null) {
+        final savedPath = await _copyFileToAppDir(image.path);
+        if (savedPath != null) {
+          _safeSetState(() {
+            _pendingAttachmentPath = savedPath;
+            _pendingAttachmentType = AttachmentType.image;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error picking image: $e');
+    }
+  }
+
+  Future<void> _pickFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: _fileExtensions,
+        withData: false,
+        withReadStream: false,
+      );
+      if (result != null && result.files.single.path != null) {
+        final filePath = result.files.single.path!;
+        final ext = p.extension(filePath).toLowerCase();
+        final isImage = _imageExtensions.contains(ext);
+        
+        final savedPath = await _copyFileToAppDir(filePath);
+        if (savedPath != null) {
+          _safeSetState(() {
+            _pendingAttachmentPath = savedPath;
+            _pendingAttachmentType = isImage ? AttachmentType.image : AttachmentType.file;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error picking file: $e');
+    }
   }
 
   void _scrollToBottom() {
@@ -84,7 +171,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _sendMessage() async {
-    if (_isGenerating || _textController.text.trim().isEmpty) return;
+    if (_isGenerating || (_textController.text.trim().isEmpty && _pendingAttachmentPath == null)) return;
 
     final messageContent = _textController. text.trim();
     _textController.clear();
@@ -101,7 +188,20 @@ class _ChatScreenState extends State<ChatScreen> {
       _currentGeneratedText = "";
     });
 
-    await chatStorage.addMessage(currentChat.id!, messageContent, true);
+    await chatStorage.addMessage(
+      currentChat.id!,
+      messageContent,
+      true,
+      attachmentPath: _pendingAttachmentPath,
+      attachmentType: _pendingAttachmentType.index,
+    );
+    
+    // Clear pending attachment after sending
+    _safeSetState(() {
+      _pendingAttachmentPath = null;
+      _pendingAttachmentType = AttachmentType.none;
+    });
+    
     _scrollToBottom();
 
     if (modelManager.activeModel == null) {
@@ -386,49 +486,125 @@ class _ChatScreenState extends State<ChatScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: SafeArea(
             top: false,
-            child: Row(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                Expanded(
-                  child: TextField(
-                    controller: _textController,
-                    decoration: InputDecoration(
-                      hintText: 'Type a message...',
-                      hintStyle: TextStyle(color: Colors.grey.shade500),
-                      filled: true,
-                      fillColor: Colors.grey.shade800,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(24),
-                        borderSide: BorderSide. none,
+                // Attachment preview
+                if (_pendingAttachmentPath != null)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade800,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        if (_pendingAttachmentType == AttachmentType.image)
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.file(
+                              File(_pendingAttachmentPath!),
+                              width: 48,
+                              height: 48,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => const Icon(
+                                Icons.broken_image,
+                                color: Colors.grey,
+                                size: 48,
+                              ),
+                            ),
+                          )
+                        else
+                          Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade700,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(Icons.insert_drive_file, color: Colors.white),
+                          ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            p.basename(_pendingAttachmentPath!),
+                            style: const TextStyle(color: Colors.white, fontSize: 13),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close, color: Colors.grey, size: 20),
+                          onPressed: _clearPendingAttachment,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(),
+                        ),
+                      ],
+                    ),
+                  ),
+                Row(
+                  children: [
+                    // Attachment buttons
+                    IconButton(
+                      icon: Icon(Icons.image, color: Colors.blue.shade300, size: 22),
+                      onPressed: _isGenerating ? null : _pickImage,
+                      tooltip: 'Attach image',
+                      padding: const EdgeInsets.all(8),
+                      constraints: const BoxConstraints(),
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(
+                      icon: Icon(Icons.attach_file, color: Colors.blue.shade300, size: 22),
+                      onPressed: _isGenerating ? null : _pickFile,
+                      tooltip: 'Attach file',
+                      padding: const EdgeInsets.all(8),
+                      constraints: const BoxConstraints(),
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: TextField(
+                        controller: _textController,
+                        decoration: InputDecoration(
+                          hintText: 'Type a message...',
+                          hintStyle: TextStyle(color: Colors.grey.shade500),
+                          filled: true,
+                          fillColor: Colors.grey.shade800,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(24),
+                            borderSide: BorderSide. none,
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 12,
+                          ),
+                        ),
+                        style: const TextStyle(color: Colors.white),
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => _isGenerating ?  null : _sendMessage(),
+                        maxLines: null,
+                        enabled: ! _isGenerating,
                       ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 20,
-                        vertical: 12,
+                    ),
+                    const SizedBox(width: 10),
+                    Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: _isGenerating 
+                              ? [Colors.red.shade600, Colors.red.shade800]
+                              : [Colors.blue.shade500, Colors.blue.shade700],
+                        ),
+                        shape: BoxShape.circle,
+                      ),
+                      child: IconButton(
+                        icon: Icon(
+                          _isGenerating ?  Icons.stop : Icons.send,
+                          color: Colors. white,
+                        ),
+                        onPressed: _isGenerating ? _stopGeneration : _sendMessage,
                       ),
                     ),
-                    style: const TextStyle(color: Colors.white),
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _isGenerating ?  null : _sendMessage(),
-                    maxLines: null,
-                    enabled: ! _isGenerating,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: _isGenerating 
-                          ? [Colors.red.shade600, Colors.red.shade800]
-                          : [Colors.blue.shade500, Colors.blue.shade700],
-                    ),
-                    shape: BoxShape.circle,
-                  ),
-                  child: IconButton(
-                    icon: Icon(
-                      _isGenerating ?  Icons.stop : Icons.send,
-                      color: Colors. white,
-                    ),
-                    onPressed: _isGenerating ? _stopGeneration : _sendMessage,
-                  ),
+                  ],
                 ),
               ],
             ),

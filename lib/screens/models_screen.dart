@@ -28,6 +28,40 @@ class ModelCard extends StatelessWidget {
 
   const ModelCard({super.key, required this.model});
 
+  IconData _getModelTypeIcon() {
+    switch (model.modelType) {
+      case ModelType.audioGeneration:
+        return Icons.audiotrack;
+      case ModelType.imageGeneration:
+        return Icons.image;
+      case ModelType.text:
+        return Icons.model_training;
+    }
+  }
+
+  Color _getModelTypeColor() {
+    if (model.status == ModelStatus.active) return Colors.green;
+    switch (model.modelType) {
+      case ModelType.audioGeneration:
+        return Colors.purple;
+      case ModelType.imageGeneration:
+        return Colors.orange;
+      case ModelType.text:
+        return Colors.blue;
+    }
+  }
+
+  String _getModelTypeLabel() {
+    switch (model.modelType) {
+      case ModelType.audioGeneration:
+        return 'Audio';
+      case ModelType.imageGeneration:
+        return 'Image';
+      case ModelType.text:
+        return 'Text';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final modelManager = Provider.of<ModelManager>(context, listen: false);
@@ -42,10 +76,8 @@ class ModelCard extends StatelessWidget {
             Row(
               children: [
                 Icon(
-                  Icons.model_training,
-                  color: model.status == ModelStatus.active
-                      ? Colors.green
-                      : Colors.blue,
+                  _getModelTypeIcon(),
+                  color: _getModelTypeColor(),
                   size: 28,
                 ),
                 const SizedBox(width: 12),
@@ -60,9 +92,29 @@ class ModelCard extends StatelessWidget {
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      Text(
-                        _getSizeString(model.size),
-                        style: TextStyle(color: Colors.grey[400], fontSize: 14),
+                      Row(
+                        children: [
+                          Text(
+                            _getSizeString(model.size),
+                            style: TextStyle(color: Colors.grey[400], fontSize: 14),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: _getModelTypeColor().withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Text(
+                              _getModelTypeLabel(),
+                              style: TextStyle(
+                                color: _getModelTypeColor(),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -86,6 +138,30 @@ class ModelCard extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(model.description),
+            // Thermal warning for non-text models
+            if (model.modelType != ModelType.text) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.orange.withValues(alpha: 0.3)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.thermostat, color: Colors.orange, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Thermal-safe: max ${model.maxTokens} tokens per generation to prevent device overheating.',
+                        style: TextStyle(color: Colors.orange.shade200, fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
 
             // Download progress

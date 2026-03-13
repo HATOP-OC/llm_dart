@@ -23,6 +23,8 @@ dependencies:
   flutter_markdown: ^0.7.3+1 # Відображення markdown
   animated_text_kit: ^4.2.2 # Анімація генерації тексту
   flutter_launcher_icons: "^0.13.1"
+  file_picker: ^8.0.0+1    # Підтримка вибору файлів
+  image_picker: ^1.1.2     # Підтримка вибору зображень
 
 flutter_launcher_icons:
   android: "ic_launcher"
